@@ -15,6 +15,9 @@
     let inertia = 0.5;
     // stickiness of background - forces less than this will be ignored
     let bg_friction = 0.4;
+    /////////
+    // selection color
+    let sel_color = "#ffff80";
     // all bubbles
     const bubbles = [];
     // start time for previous frame
@@ -41,7 +44,7 @@
     }
     //
     class Bubble {
-        constructor(x, y, r, color, text="", fixed=false, gravity=1, bounce=1) {
+        constructor(x, y, r, color, text="", fixed=false, weight=1, bounce=1) {
             this.x = x;
             this.y = y;
             this.vx = 0;
@@ -50,11 +53,13 @@
             this.r2 = r*r;
             this.color = color;
             this.text = text;
-            this.gravity = gravity;
+            this.weight = weight;
             this.bounce = bounce;
             this.fixed = fixed;
             this.dragging = false;
+            this.selected = false;
             this.squish = [];
+            this.change_size = 0;
             this.restore_surface();
         }
         restore_surface() {
@@ -74,7 +79,6 @@
             if (isNaN(w_poke))
                 // entirely inside
                 return;
-            this.text = w_poke.toFixed(1);
             const max_sq = this.r * 0.85;
             function f(a) {
                 var wx = (a - angle)/w_poke;
@@ -84,13 +88,10 @@
                 var dd = da**0.25 * depth;
                 return Math.min(dd, max_sq);
             }
-            //const min_sq = this.r*0.3;
             const nr = Math.floor(w_poke / to_n + 0.5);
             for (var n=ai-nr; n <= ai+nr; n ++) {
                 const n1 = (n + npts) % npts;
                 this.squish[n1] -= f(n * 6.284 / npts);
-                //if (this.squish[n1] < min_sq)
-                //    this.squish[n1] = min_sq;
             }
         }
         draw(ctx) {
@@ -111,12 +112,19 @@
                         ctx.lineTo(x, y)
                     a += da;
                 }
+                if (this.selected)
+                    ctx.closePath();
             } else {
                 ctx.ellipse(this.x, this.y, r - bubble_wall, r - bubble_wall, 0, 0, 6.284);
                 ctx.closePath();
             }
+            if (this.selected) {
+                ctx.fillStyle = sel_color;
+                ctx.fill()
+            }
             ctx.stroke();
             ctx.textAlign = "center";
+            ctx.fillStyle = 'black';
             ctx.fillText(this.text, this.x, this.y, this.r*1.8)
         }
         forces(dt) {
@@ -142,11 +150,9 @@
                     // show bounce visually
                     const poke_angle = Math.atan2(dy, dx);
                     let poke_depth = a.r + b.r - d;
-                    //this.text = poke_depth.toFixed(2);
                     if (! b.fixed)
                         poke_depth /= 2;
                     this.poke(poke_depth, poke_angle, d, b.r);
-                    //this.text = poke_depth.toFixed(2);
                 } else if (closeness < 10000) {
                     // mild repulsion
                     f_a = repulsion * dt * 10 / (closeness + 10);
@@ -162,7 +168,7 @@
             // toward center
             const d0 = Math.sqrt(a.x*a.x + a.y*a.y);
             if (d0 > 30) {
-                const f0c = dt * to_center * this.gravity;
+                const f0c = dt * to_center * this.weight;
                 fx -= f0c * a.x/d0;
                 fy -= f0c * a.y/d0;
             }
@@ -170,7 +176,6 @@
                 fx = 0;
             if (Math.abs(fy) < bg_friction)
                 fy = 0;
-            //this.text = "(" + fx.toFixed(2) + ", " + fy.toFixed(2) + ")"
             return [fx, fy];
         }
         move(dt, friction) {
@@ -181,6 +186,14 @@
             this.y += this.vy * inertia;
             this.vx *= friction;
             this.vy *= friction;
+            if (this.change_size) {
+                let amt = dt * 0.8 * this.change_size;
+                if (Math.abs(amt) > Math.abs(this.change_size))
+                    amt = this.change_size;
+                this.r += amt;
+                this.r2 = this.r**2;
+                this.change_size -= amt;
+            }
         }
     }
     function overbubble(x, y) {
@@ -191,16 +204,94 @@
                 return b;
         }
     }
-    function draggability(canvas) {
+    function draw_bubble_form(bubble, area) {
+        function refresh() {
+            if (! bubble.selected)
+                return;
+            var h = "";
+            h += "<div class='title'>Bubble: _____</div>";
+            area.innerHTML = h;
+            // edit title
+            const edit_text = document.createElement("input");
+            edit_text.setAttribute("type", "text");
+            edit_text.value = bubble.text;
+            edit_text.addEventListener("input", function() {
+                bubble.text = edit_text.value;
+            })
+            area.appendChild(edit_text);
+            // bigger/smaller
+            const btn_bigger = document.createElement("button");
+            btn_bigger.innerText = "bigger"
+            btn_bigger.addEventListener("click", function() {
+                bubble.change_size = bubble.r * 0.10;
+            });
+            area.appendChild(btn_bigger);
+            const btn_smaller = document.createElement("button");
+            btn_smaller.innerText = "smaller"
+            btn_smaller.addEventListener("click", function() {
+                bubble.change_size = -bubble.r * 0.10;
+            });
+            area.appendChild(btn_smaller);
+            // weight
+            const edit_weight = document.createElement("input");
+            edit_weight.setAttribute("type", "number");
+            edit_weight.value = bubble.weight.toFixed(1);
+            function set_w(vw) {
+                vw = Math.min(vw, 20);
+                vw = Math.max(vw, 0.3);
+                edit_weight.value = bubble.weight.toFixed(1);
+                bubble.weight = vw;
+            }
+            edit_weight.addEventListener("change", function() {
+                let vw = parseFloat(edit_weight.value);
+                set_w(vw);
+            })
+            const btn_heavier = document.createElement("button");
+            btn_heavier.innerText = "heavier"
+            btn_heavier.addEventListener("click", function() {
+                set_w(bubble.weight *= 1.2);
+            });
+            const btn_lighter = document.createElement("button");
+            btn_lighter.innerText = "lighter"
+            btn_lighter.addEventListener("click", function() {
+                set_w(bubble.weight *= 0.8);
+            });
+            area.appendChild(edit_weight);
+            area.appendChild(btn_heavier);
+            area.appendChild(btn_lighter);
+            //
+            if (bubble.selected) {
+                setTimeout(refresh, 60000);
+            }
+        }
+        refresh();
+    }
+    function drag_and_select(canvas) {
         var onbubble = null;
         var start = null;
         var center = [canvas.width/2, canvas.height/2];
+        var panel = document.getElementById("panel");
         function to_ctx_coords(evt) {
             return [evt.x - center[0], evt.y - center[1]];
+        }
+        function select_bubble(bubble) {
+            // deselect all bubbles
+            for (var nb=0; nb < bubbles.length; nb++)
+                bubbles[nb].selected = false;
+            if (bubble) {
+                // select bubble
+                bubble.selected = true;
+                draw_bubble_form(bubble, panel);
+                panel.style.display = 'block';
+            } else {
+                panel.innerText = "";
+                panel.style.display = 'none';
+            }
         }
         canvas.addEventListener("mousedown", function(evt){
             const pos = to_ctx_coords(evt);
             onbubble = overbubble(pos[0], pos[1]);
+            select_bubble(onbubble);
             if (onbubble) {
                 onbubble.dragging = true;
                 start = [pos[0] - onbubble.x, pos[1] - onbubble.y];
@@ -240,7 +331,7 @@
         // start bubble animations
         setInterval(function(){ frame(canvas, ctx); }, 50);
         // make bubbles draggable
-        draggability(canvas);
+        drag_and_select(canvas);
         bubbles.push(new Bubble(0, 0, 140, 'blue', 'a', true));
         bubbles.push(new Bubble(-200, 300, 120, 'green', 'g', false, 3));
         /* */
