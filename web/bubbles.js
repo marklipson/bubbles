@@ -15,9 +15,11 @@
     let inertia = 0.5;
     // stickiness of background - forces less than this will be ignored
     let bg_friction = 0.4;
+    // available colors
+    const r_colors = ["black", "blue", "gray", "green", "red", "orange", "purple", "aqua", "brown", "crimson", "darkcyan", "darkolivegreen", "darkseagreen", "darkslateblue", "darkturquoise", "deeppink", "darkorange", "greenyellow", "goldenrod"];
     /////////
-    // selection color
-    let sel_color = "#ffff80";
+    // colors
+    let sel_color = "rgba(255,255,128,128)";  // "#ffff80";
     // all bubbles
     const bubbles = [];
     // start time for previous frame
@@ -60,6 +62,7 @@
             this.selected = false;
             this.squish = [];
             this.change_size = 0;
+            this.popping = 0;
             this.restore_surface();
         }
         restore_surface() {
@@ -96,8 +99,6 @@
         }
         draw(ctx) {
             const r = this.r - bubble_outer_margin;
-            ctx.strokeStyle = this.color;
-            ctx.lineWidth = bubble_wall;
             ctx.beginPath();
             if (this.squish) {
                 ctx.lineCap = "round";
@@ -118,24 +119,33 @@
                 ctx.ellipse(this.x, this.y, r - bubble_wall, r - bubble_wall, 0, 0, 6.284);
                 ctx.closePath();
             }
-            if (this.selected) {
+            if (this.popping) {
+                // hm
+            }
+            else if (this.selected) {
                 ctx.fillStyle = sel_color;
                 ctx.fill()
             }
+            ctx.lineWidth = bubble_wall;
+            if (this.popping)
+                ctx.lineWidth = 1;
+            ctx.strokeStyle = this.color;
             ctx.stroke();
-            ctx.textAlign = "center";
-            ctx.fillStyle = 'black';
-            ctx.fillText(this.text, this.x, this.y, this.r*1.8)
+            if (! this.popping) {
+                ctx.textAlign = "center";
+                ctx.fillStyle = 'black';
+                ctx.fillText(this.text, this.x, this.y, this.r * 1.8)
+            }
         }
         forces(dt) {
-            if (this.fixed)
-                return [0, 0];
             let fx=0, fy=0;
             const a = this;
             this.restore_surface();
+            if (this.popping)
+                return [0, 0];
             for (var nb=0; nb < bubbles.length; nb++){
                 const b = bubbles[nb];
-                if (a === b)
+                if (a === b  ||  b.popping)
                     continue;
                 const dx = b.x - a.x, dy = b.y - a.y;
                 const r2 = dx*dx + dy*dy;
@@ -150,8 +160,9 @@
                     // show bounce visually
                     const poke_angle = Math.atan2(dy, dx);
                     let poke_depth = a.r + b.r - d;
-                    if (! b.fixed)
-                        poke_depth /= 2;
+                    // FIXME adjustable bounciness
+                    //if (! b.fixed)
+                    poke_depth /= 2;
                     this.poke(poke_depth, poke_angle, d, b.r);
                 } else if (closeness < 10000) {
                     // mild repulsion
@@ -163,7 +174,7 @@
                 }
             }
             this.squish = surface_tension(this.squish, 3);
-            if (this.dragging)
+            if (this.dragging  ||  this.fixed  ||  this.popping)
                 return [0, 0];
             // toward center
             const d0 = Math.sqrt(a.x*a.x + a.y*a.y);
@@ -193,6 +204,16 @@
                 this.r += amt;
                 this.r2 = this.r**2;
                 this.change_size -= amt;
+            }
+            if (this.popping) {
+                const expand = 0.3 ** dt;
+                this.r *= expand;
+                this.r2 = this.r ** 2;
+                this.popping *= expand;
+                if (this.popping < 0.1) {
+                    var nb = bubbles.indexOf(this);
+                    bubbles.splice(nb, 1);
+                }
             }
         }
     }
@@ -259,6 +280,22 @@
             area.appendChild(edit_weight);
             area.appendChild(btn_heavier);
             area.appendChild(btn_lighter);
+            // color
+            const btn_color = document.createElement("button");
+            btn_color.innerText = "color"
+            btn_color.addEventListener("click", function() {
+                let nc = r_colors.indexOf(bubble.color);
+                bubble.color = r_colors[nc+1];
+            });
+            area.appendChild(btn_color);
+            // pop bubble
+            const btn_pop = document.createElement("button");
+            btn_pop.innerText = "pop"
+            btn_pop.addEventListener("click", function() {
+                bubble.popping = 1;
+                bubble.restore_surface();
+            });
+            area.appendChild(btn_pop);
             //
             if (bubble.selected) {
                 setTimeout(refresh, 60000);
@@ -288,6 +325,14 @@
                 panel.style.display = 'none';
             }
         }
+        function create_bubble(at) {
+            const bubble = new Bubble(at[0], at[1], 50, "black")
+            bubbles.push(bubble);
+            select_bubble(bubble);
+        }
+        canvas.addEventListener("dblclick", function(evt) {
+            create_bubble(to_ctx_coords(evt));
+        });
         canvas.addEventListener("mousedown", function(evt){
             const pos = to_ctx_coords(evt);
             onbubble = overbubble(pos[0], pos[1]);
@@ -334,8 +379,7 @@
         drag_and_select(canvas);
         bubbles.push(new Bubble(0, 0, 140, 'blue', 'a', true));
         bubbles.push(new Bubble(-200, 300, 120, 'green', 'g', false, 3));
-        /* */
-        const r_colors = ["black", "blue", "gray", "yellow", "green", "red", "orange", "purple"];
+        /*
         bubbles.push(new Bubble(400, -150, 40, 'red', 'r'));
         for (var nb=0; nb < 25; nb++) {
             var px = Math.random()*900 - 450;
@@ -344,8 +388,28 @@
             var c = r_colors[Math.floor(Math.random()*r_colors.length)];
             bubbles.push(new Bubble(px, py, r, c, '*'));
         }
-        /* */
+        */
     }
     window.addEventListener("load", setup);
 })();
 
+/*
+ TODO...
+
+ instructions
+   double click to create new bubble
+
+ multi-line description entry
+ bubbles to show only first part of description, wrap text, etc.
+ zoom/pan
+ toggle pinned
+ choose which bubble to drift toward
+ search for a bubble by name
+ hover to see details
+ JIRA link per bubble
+
+ server side
+   register/login
+   load/save data
+
+ */
