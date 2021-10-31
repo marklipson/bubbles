@@ -5,29 +5,39 @@
     <title>Floating Bubbles</title>
     <script src="bubbles.js"></script>
     <style>
+        #panel, #toolbar {
+            position: fixed;
+            margin: 8px;
+            z-index: 10;
+        }
         #panel {
             display: none;
-            position: fixed;
             top: 0;
             right: 0;
             opacity: 0.9;
-            margin: 8px;
-            padding: 12px;
             border: solid 3px #c0c060;
             background-color: #ffff80;
             color: #808040;
-            z-index: 10;
+            padding: 12px;
             border-radius: 16px;
         }
         #panel .title {
             font-weight: bold;
             margin-bottom: 6px;
         }
+        #toolbar {
+            top: 0;
+            left: 0;
+        }
     </style>
 </head>
 <body>
     <canvas id="view" width="1000" height="1000">
     </canvas>
+    <div id="toolbar">
+        <button id="zoom-in">zoom in</button><br/>
+        <button id="zoom-out">zoom out</button>
+    </div>
     <div id="panel"></div>
 </body>
 </html>

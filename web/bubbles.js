@@ -2,7 +2,7 @@
     // overall gravity toward center
     let to_center = 18;
     // closer to 1: free floating, closer to 0: lots of friction - atmospheric friction?
-    let v_friction = 0.1;
+    let v_friction = 0.3;
     // how hard bubbles push one another away when touching
     let bounce = 0.7;
     // how hard bubbles push one another away when close
@@ -24,6 +24,16 @@
     const bubbles = [];
     // start time for previous frame
     let t0 = new Date().getTime();
+    //view
+    let pan = [0, 0];
+    let zoom = 1;
+    let the_canvas = null;
+    let the_context = null;
+    function set_pan_zoom(px, py, z=0) {
+        pan = [px, py];
+        zoom = z || zoom;
+        the_context.setTransform(zoom, 0, 0, zoom, pan[0], pan[1]);
+    }
     // utilities
     function surface_tension(surface, fuzz) {
         let i = surface;
@@ -103,7 +113,7 @@
             if (this.squish) {
                 ctx.lineCap = "round";
                 let npts = this.squish.length;
-                let a = 0, da = 6.284 / npts;
+                let a = 0, da = 6.28318 / npts;
                 for (var n=0; n < npts+1; n++) {
                     const x = this.x + (this.squish[n%npts] - bubble_outer_margin) * Math.cos(a);
                     const y = this.y + (this.squish[n%npts] - bubble_outer_margin) * Math.sin(a);
@@ -230,7 +240,7 @@
             if (! bubble.selected)
                 return;
             var h = "";
-            h += "<div class='title'>Bubble: _____</div>";
+            h += "<div class='title'>Edit Bubble Data</div>";
             area.innerHTML = h;
             // edit title
             const edit_text = document.createElement("input");
@@ -303,13 +313,23 @@
         }
         refresh();
     }
-    function drag_and_select(canvas) {
+    function drag_and_select() {
+        const canvas = the_canvas
         var onbubble = null;
         var start = null;
-        var center = [canvas.width/2, canvas.height/2];
+        var move00 = null, move0 = null, move1 = null;
+        var pan0 = null;
+        var clicked = false;
         var panel = document.getElementById("panel");
+        // set up tools
+        document.getElementById("zoom-in").addEventListener("click", function(){
+            set_pan_zoom(pan[0], pan[1], zoom*1.25)
+        });
+        document.getElementById("zoom-out").addEventListener("click", function(){
+            set_pan_zoom(pan[0], pan[1], zoom*(1/1.25))
+        });
         function to_ctx_coords(evt) {
-            return [evt.x - center[0], evt.y - center[1]];
+            return [(evt.offsetX - pan[0])/zoom, (evt.offsetY - pan[1])/zoom];
         }
         function select_bubble(bubble) {
             // deselect all bubbles
@@ -335,29 +355,57 @@
         });
         canvas.addEventListener("mousedown", function(evt){
             const pos = to_ctx_coords(evt);
+            clicked = true;
             onbubble = overbubble(pos[0], pos[1]);
             select_bubble(onbubble);
             if (onbubble) {
                 onbubble.dragging = true;
+                onbubble.vx = 0;
+                onbubble.vy = 0;
                 start = [pos[0] - onbubble.x, pos[1] - onbubble.y];
             }
+            move00 = [pos[0], pos[1], new Date().getTime()]
+            pan0 = [pan[0], pan[1]];
         });
         canvas.addEventListener("mouseup", function(){
-            if (onbubble)
+            clicked = false;
+            if (onbubble) {
                 onbubble.dragging = false;
+                // 'throw' it
+                if (move0 && move1) {
+                    const dx = move1[0] - move0[0];
+                    const dy = move1[1] - move0[1];
+                    const dt = move1[2] - move0[2];
+                    onbubble.vx += 20*dx*onbubble.weight / dt;
+                    onbubble.vy += 20*dy*onbubble.weight / dt;
+                }
+            }
             onbubble = null;
         });
         canvas.addEventListener("mousemove", function(evt){
+            const pos = to_ctx_coords(evt);
+            const move = [pos[0], pos[1], new Date().getTime()]
+            move0 = move1;
+            move1 = move;
             if (onbubble) {
-                const pos = to_ctx_coords(evt);
+                // drag
                 onbubble.x = pos[0] - start[0];
                 onbubble.y = pos[1] - start[1];
-
+            } else if (clicked) {
+                // pan
+                const dx = move[0] - move00[0];
+                const dy = move[1] - move00[1];
+                const z = zoom;
+                // FIXME this is jumpy for some reason
+                set_pan_zoom(pan0[0] + dx*z, pan0[1] + dy*z);
             }
         });
     }
-    function frame(canvas, ctx) {
-        ctx.clearRect(-canvas.width/2, -canvas.height/2, canvas.width, canvas.height);
+    function frame() {
+        const ctx = the_context;
+        const z = zoom;
+        //ctx.clearRect(-the_canvas.width/2, -the_canvas.height/2, the_canvas.width, the_canvas.height)
+        ctx.clearRect(-pan[0]/z, -pan[1]/z, the_canvas.width/z, the_canvas.height/z)
         const t = new Date().getTime();
         const dt = Math.min(t - t0, 0.1);
         const friction = v_friction**dt;
@@ -367,28 +415,40 @@
             bubbles[nb].draw(ctx);
         }
     }
-    function setup() {
+    function add_random_bubble() {
+        var px = Math.random()*900 - 450;
+        var py = Math.random()*900 - 450;
+        var r = Math.random()*80 + 20;
+        var c = r_colors[Math.floor(Math.random()*r_colors.length)];
+        bubbles.push(new Bubble(px, py, r, c, ''));
+    }
+    function setup(mode) {
         const canvas = document.getElementById("view");
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
-        const ctx = canvas.getContext('2d');
-        ctx.translate(canvas.width/2, canvas.height/2);
+        the_canvas = canvas;
+        the_context = canvas.getContext('2d');
+        set_pan_zoom(canvas.width/2, canvas.height/2, 1);
         // start bubble animations
-        setInterval(function(){ frame(canvas, ctx); }, 50);
-        // make bubbles draggable
-        drag_and_select(canvas);
-        bubbles.push(new Bubble(0, 0, 140, 'blue', 'a', true));
-        bubbles.push(new Bubble(-200, 300, 120, 'green', 'g', false, 3));
-        /*
-        bubbles.push(new Bubble(400, -150, 40, 'red', 'r'));
-        for (var nb=0; nb < 25; nb++) {
-            var px = Math.random()*900 - 450;
-            var py = Math.random()*900 - 450;
-            var r = Math.random()*70 + 25;
-            var c = r_colors[Math.floor(Math.random()*r_colors.length)];
-            bubbles.push(new Bubble(px, py, r, c, '*'));
+        setInterval(function(){ frame(); }, 50);
+        if (mode === "demo" || false) {
+            bubbles.push(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
+            for (var nb=0; nb < 25; nb++)
+                add_random_bubble();
+            function updates() {
+                if (Math.random() < 0.1 && bubbles.length < 40)
+                    add_random_bubble();
+                if (Math.random() < 0.1 && bubbles.length > 10) {
+                    nb = Math.floor(Math.random()*(bubbles.length - 1)) + 1;
+                    bubbles[nb].popping = 1;
+                }
+            }
+            setInterval(updates, 150);
+        } else {
+            bubbles.push(new Bubble(0, 0, 140, 'blue', 'double click to add a bubble, click to change or drag', true));
+            // make bubbles draggable
+            drag_and_select();
         }
-        */
     }
     window.addEventListener("load", setup);
 })();
@@ -396,20 +456,18 @@
 /*
  TODO...
 
- instructions
-   double click to create new bubble
-
- multi-line description entry
- bubbles to show only first part of description, wrap text, etc.
- zoom/pan
+ start in demo mode
+   start button, save/restore
+ nicer zoom buttons
+ pan is jumpy
  toggle pinned
+ multi-line description entry, multi-line display in bubbles
  choose which bubble to drift toward
- search for a bubble by name
+ ground-down mode, or place a boundary
  hover to see details
  JIRA link per bubble
 
- server side
-   register/login
-   load/save data
+ instructions
+   double click to create new bubble
 
  */
