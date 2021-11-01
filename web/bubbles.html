@@ -29,14 +29,22 @@
             top: 0;
             left: 0;
         }
+        .btn-zoom {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            text-align: center;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
     </style>
 </head>
 <body>
     <canvas id="view" width="1000" height="1000">
     </canvas>
     <div id="toolbar">
-        <button id="zoom-in">zoom in</button><br/>
-        <button id="zoom-out">zoom out</button>
+        <button id="zoom-in" class="btn-zoom">+</button><br/>
+        <button id="zoom-out" class="btn-zoom">-</button>
     </div>
     <div id="panel"></div>
 </body>

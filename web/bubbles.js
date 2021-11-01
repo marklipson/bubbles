@@ -136,11 +136,19 @@
                 ctx.fillStyle = sel_color;
                 ctx.fill()
             }
-            ctx.lineWidth = bubble_wall;
+            const w_h = bubble_wall * Math.max(0.1, Math.log(4*this.weight));
+            ctx.lineWidth = w_h;
             if (this.popping)
                 ctx.lineWidth = 1;
             ctx.strokeStyle = this.color;
             ctx.stroke();
+            if (this.fixed) {
+                ctx.lineWidth = ctx.lineWidth / 3;
+                ctx.strokeStyle = "white"
+                ctx.setLineDash([4, 10])
+                ctx.stroke();
+                ctx.setLineDash([])
+            }
             if (! this.popping) {
                 ctx.textAlign = "center";
                 ctx.fillStyle = 'black';
@@ -170,8 +178,6 @@
                     // show bounce visually
                     const poke_angle = Math.atan2(dy, dx);
                     let poke_depth = a.r + b.r - d;
-                    // FIXME adjustable bounciness
-                    //if (! b.fixed)
                     poke_depth /= 2;
                     this.poke(poke_depth, poke_angle, d, b.r);
                 } else if (closeness < 10000) {
@@ -231,8 +237,15 @@
         for (var nb=0; nb < bubbles.length; nb++) {
             const b = bubbles[nb];
             const d2 = (x-b.x)*(x-b.x)+(y-b.y)*(y-b.y);
-            if (d2 < b.r2)
-                return b;
+            if (d2 < b.r2) {
+                if (b.squish) {
+                    let clk_a = Math.atan2(y - b.y, x - b.x) * b.squish.length / 6.284;
+                    clk_a = Math.floor((clk_a + b.squish.length) % b.squish.length);
+                    const clk_r = b.squish[clk_a];
+                    if (d2 < clk_r*clk_r)
+                        return b;
+                }
+            }
         }
     }
     function draw_bubble_form(bubble, area) {
@@ -269,7 +282,7 @@
             edit_weight.value = bubble.weight.toFixed(1);
             function set_w(vw) {
                 vw = Math.min(vw, 20);
-                vw = Math.max(vw, 0.3);
+                vw = Math.max(vw, 0.2);
                 edit_weight.value = bubble.weight.toFixed(1);
                 bubble.weight = vw;
             }
@@ -298,6 +311,13 @@
                 bubble.color = r_colors[nc+1];
             });
             area.appendChild(btn_color);
+            // pinned
+            const btn_pinned = document.createElement("button");
+            btn_pinned.innerText = "pinned"
+            btn_pinned.addEventListener("click", function() {
+                bubble.fixed = ! bubble.fixed;
+            });
+            area.appendChild(btn_pinned);
             // pop bubble
             const btn_pop = document.createElement("button");
             btn_pop.innerText = "pop"
@@ -332,10 +352,11 @@
             return [(evt.offsetX - pan[0])/zoom, (evt.offsetY - pan[1])/zoom];
         }
         function select_bubble(bubble) {
+            const select = ! bubble.selected;
             // deselect all bubbles
             for (var nb=0; nb < bubbles.length; nb++)
                 bubbles[nb].selected = false;
-            if (bubble) {
+            if (bubble && select) {
                 // select bubble
                 bubble.selected = true;
                 draw_bubble_form(bubble, panel);
@@ -346,7 +367,8 @@
             }
         }
         function create_bubble(at) {
-            const bubble = new Bubble(at[0], at[1], 50, "black")
+            const c = r_colors[Math.floor(Math.random()*r_colors.length)];
+            const bubble = new Bubble(at[0], at[1], 50, c);
             bubbles.push(bubble);
             select_bubble(bubble);
         }
@@ -365,6 +387,7 @@
                 start = [pos[0] - onbubble.x, pos[1] - onbubble.y];
             }
             move00 = [pos[0], pos[1], new Date().getTime()]
+            move0 = move1 = null;
             pan0 = [pan[0], pan[1]];
         });
         canvas.addEventListener("mouseup", function(){
@@ -456,13 +479,11 @@
 /*
  TODO...
 
- start in demo mode
-   start button, save/restore
- nicer zoom buttons
  pan is jumpy
- toggle pinned
  multi-line description entry, multi-line display in bubbles
  choose which bubble to drift toward
+ start in demo mode
+   start button, save/restore
  ground-down mode, or place a boundary
  hover to see details
  JIRA link per bubble
