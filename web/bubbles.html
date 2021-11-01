@@ -25,9 +25,16 @@
             font-weight: bold;
             margin-bottom: 6px;
         }
+        #panel textarea {
+            height: 45px;
+            width: 450px;
+        }
         #toolbar {
             top: 0;
             left: 0;
+        }
+        #toolbar select, button, input {
+            margin-bottom: 4px;
         }
         .btn-zoom {
             display: inline-block;
@@ -43,8 +50,11 @@
     <canvas id="view" width="1000" height="1000">
     </canvas>
     <div id="toolbar">
+        <input id="title"/>
+        <select id="saves"></select><br/>
+        <button id="new-file">new</button><br/>
         <button id="zoom-in" class="btn-zoom">+</button><br/>
-        <button id="zoom-out" class="btn-zoom">-</button>
+        <button id="zoom-out" class="btn-zoom">-</button><br/>
     </div>
     <div id="panel"></div>
 </body>

@@ -16,12 +16,29 @@
     // stickiness of background - forces less than this will be ignored
     let bg_friction = 0.4;
     // available colors
-    const r_colors = ["black", "blue", "gray", "green", "red", "orange", "purple", "aqua", "brown", "crimson", "darkcyan", "darkolivegreen", "darkseagreen", "darkslateblue", "darkturquoise", "deeppink", "darkorange", "greenyellow", "goldenrod"];
+    const r_colors = [
+        "black", "gray", "lightgray",
+        "red", "deeppink", "crimson",
+        "orange", "darkorange", "goldenrod", "brown",
+        "yellow",
+        "greenyellow",
+        "green",
+        "darkolivegreen", "darkseagreen",
+        "darkturquoise",
+        "darkcyan",
+        "aqua",
+        "blue",
+        "darkslateblue",
+        "purple"
+    ];
     /////////
     // colors
     let sel_color = "rgba(255,255,128,128)";  // "#ffff80";
     // all bubbles
-    const bubbles = [];
+    let bubbles = [];
+    let popped = [];
+    let save_popped = true;
+    let title = "";
     // start time for previous frame
     let t0 = new Date().getTime();
     //view
@@ -29,6 +46,65 @@
     let zoom = 1;
     let the_canvas = null;
     let the_context = null;
+    // load/save
+    function all_saves() {
+        const data = localStorage.getItem("saves");
+        if (data === null)
+            return [];
+        return JSON.parse(data);
+    }
+    function upd_saves(saves=null) {
+        if (saves === null)
+            saves = all_saves();
+        saves.sort();
+        localStorage.setItem("saves", JSON.stringify(saves))
+        // update the dropdown
+        const save_sel = document.getElementById("saves");
+        save_sel.innerHTML = "";
+        var opt = document.createElement("option");
+        opt.innerText = "---";
+        opt.setAttribute("value", "");
+        save_sel.appendChild(opt);
+        for (var n=0; n < saves.length; n++) {
+            var opt = document.createElement("option");
+            opt.innerText = saves[n];
+            save_sel.appendChild(opt);
+        }
+    }
+    function save(name="") {
+        name = name || "default";
+        const all = all_saves();
+        const data = JSON.stringify({"bubbles": bubbles, "popped": popped});
+        localStorage.setItem("save." + name, data);
+        // make sure the save is listed
+        if (all.indexOf(name) < 0) {
+            all.push(name);
+            upd_saves(all);
+        }
+    }
+    function load(name="") {
+        name = name || "default";
+        title = name;
+        const edt_title = document.getElementById("title");
+        edt_title.value = name;
+        const data = JSON.parse(localStorage.getItem("save." + name));
+        if (data === null)
+            return;
+        bubbles = []
+        for (var nb=0; nb < data.bubbles.length; nb++) {
+            const b = data.bubbles[nb];
+            if (b === null || b.x === null)
+                continue;
+            const b_new = new Bubble(b.x, b.y, b.r, b.color, b.text, b.fixed, b.weight, b.bounce)
+            bubbles.push(b_new);
+        }
+        popped = data.popped;
+    }
+    function clear() {
+        bubbles = []
+        popped = [];
+    }
+    //
     function set_pan_zoom(px, py, z=0) {
         pan = [px, py];
         zoom = z || zoom;
@@ -68,6 +144,8 @@
             this.weight = weight;
             this.bounce = bounce;
             this.fixed = fixed;
+            this.popped_at = null;
+            // view-related
             this.dragging = false;
             this.selected = false;
             this.squish = [];
@@ -151,8 +229,25 @@
             }
             if (! this.popping) {
                 ctx.textAlign = "center";
-                ctx.fillStyle = 'black';
-                ctx.fillText(this.text, this.x, this.y, this.r * 1.8)
+                ctx.fillStyle = this.selected ? 'black' : '#606060';
+                let margin = 25;
+                let lines = this.text.trim().split("\n");
+                let line_height = 16;
+                ctx.font = line_height + "px sans-serif";
+                const max_lines = Math.floor((2*this.r - margin) / line_height);
+                if (lines.length > max_lines)
+                    lines = lines.slice(0, max_lines);
+                let by = line_height*lines.length/2 - line_height*0.8;
+                for (var nl=0; nl < lines.length; nl++) {
+                    let line = lines[nl];
+                    let bw = Math.sqrt(this.r2 - by*by)*2 - margin;
+                    let tw = ctx.measureText(line).width;
+                    if (tw > bw) {
+                        line = line.substring(0, Math.floor((bw-8) * line.length / tw)) + "\u2026";
+                    }
+                    ctx.fillText(line, this.x, this.y - by);
+                    by -= line_height;
+                }
             }
         }
         forces(dt) {
@@ -228,7 +323,10 @@
                 this.popping *= expand;
                 if (this.popping < 0.1) {
                     var nb = bubbles.indexOf(this);
-                    bubbles.splice(nb, 1);
+                    const bbl = bubbles.splice(nb, 1);
+                    bbl.popped_at = new Date().getTime();
+                    if (save_popped)
+                        popped.push(bbl);
                 }
             }
         }
@@ -256,26 +354,28 @@
             h += "<div class='title'>Edit Bubble Data</div>";
             area.innerHTML = h;
             // edit title
-            const edit_text = document.createElement("input");
-            edit_text.setAttribute("type", "text");
+            const edit_text = document.createElement("textarea");
+            edit_text.setAttribute("rows", "3");
             edit_text.value = bubble.text;
             edit_text.addEventListener("input", function() {
                 bubble.text = edit_text.value;
             })
             area.appendChild(edit_text);
+            area.appendChild(document.createElement("br"));
             // bigger/smaller
-            const btn_bigger = document.createElement("button");
-            btn_bigger.innerText = "bigger"
-            btn_bigger.addEventListener("click", function() {
-                bubble.change_size = bubble.r * 0.10;
-            });
-            area.appendChild(btn_bigger);
             const btn_smaller = document.createElement("button");
             btn_smaller.innerText = "smaller"
             btn_smaller.addEventListener("click", function() {
                 bubble.change_size = -bubble.r * 0.10;
             });
             area.appendChild(btn_smaller);
+            const btn_bigger = document.createElement("button");
+            btn_bigger.innerText = "bigger"
+            btn_bigger.addEventListener("click", function() {
+                bubble.change_size = bubble.r * 0.10;
+            });
+            area.appendChild(btn_bigger);
+            area.appendChild(document.createElement("br"));
             // weight
             const edit_weight = document.createElement("input");
             edit_weight.setAttribute("type", "number");
@@ -300,9 +400,10 @@
             btn_lighter.addEventListener("click", function() {
                 set_w(bubble.weight *= 0.8);
             });
+            area.appendChild(btn_lighter);
             area.appendChild(edit_weight);
             area.appendChild(btn_heavier);
-            area.appendChild(btn_lighter);
+            area.appendChild(document.createElement("br"));
             // color
             const btn_color = document.createElement("button");
             btn_color.innerText = "color"
@@ -348,11 +449,72 @@
         document.getElementById("zoom-out").addEventListener("click", function(){
             set_pan_zoom(pan[0], pan[1], zoom*(1/1.25))
         });
+        const edt_title = document.getElementById("title");
+        const save_sel = document.getElementById("saves");
+        function title_change() {
+            // title changed
+            const edited = edt_title.value || "default";
+            if (edited === title)
+                return;
+            if (edited === "") {
+                edt_title.value = title;
+                return;
+            }
+            const saves = all_saves();
+            if (saves.indexOf(edited) >= 0) {
+                // warn on overwrite
+                if (! confirm("Are you sure you want to replace '" + edited + "'?"))
+                    return;
+            }
+            // change title, rename saved data
+            title = edited;
+            let n = saves.indexOf(title);
+            if (n >= 0)
+                saves.splice(n, 1);
+            saves.push(edited);
+            upd_saves(saves);
+            // save right away
+            save(title);
+            // select in drop-down
+            save_sel.value = title;
+            // bookmarkable
+            window.location.hash = title;
+        }
+        edt_title.addEventListener("keydown", function(evt) {
+            if (evt.code === "Enter") {
+                edt_title.blur();
+            }
+        });
+        // rename on Enter/blur of title editor
+        edt_title.addEventListener("blur", title_change);
+        // switch
+        save_sel.addEventListener("change", function(){
+            if (save_sel.value === "")
+                return;
+            save(title);
+            load(save_sel.value);
+        });
+        // 'new'
+        const btn_new = document.getElementById("new-file");
+        btn_new.addEventListener("click", function(){
+            // save current data
+            save(title);
+            const new_title = prompt("Name for new thing: ");
+            if (new_title === "")
+                return;
+            clear();
+            title = new_title;
+            save(title);
+            load(title);
+            // bookmarkable
+            window.location.hash = title;
+        });
+        //
         function to_ctx_coords(evt) {
             return [(evt.offsetX - pan[0])/zoom, (evt.offsetY - pan[1])/zoom];
         }
         function select_bubble(bubble) {
-            const select = ! bubble.selected;
+            const select = bubble && ! bubble.selected;
             // deselect all bubbles
             for (var nb=0; nb < bubbles.length; nb++)
                 bubbles[nb].selected = false;
@@ -445,7 +607,11 @@
         var c = r_colors[Math.floor(Math.random()*r_colors.length)];
         bubbles.push(new Bubble(px, py, r, c, ''));
     }
-    function setup(mode) {
+    function setup() {
+        let mode = window.location.hash;
+        if (mode.startsWith("#"))
+            mode = mode.substring(1);
+        mode = decodeURI(mode);
         const canvas = document.getElementById("view");
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
@@ -454,7 +620,7 @@
         set_pan_zoom(canvas.width/2, canvas.height/2, 1);
         // start bubble animations
         setInterval(function(){ frame(); }, 50);
-        if (mode === "demo" || false) {
+        if (mode === "_demo_") {
             bubbles.push(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
             for (var nb=0; nb < 25; nb++)
                 add_random_bubble();
@@ -468,7 +634,13 @@
             }
             setInterval(updates, 150);
         } else {
-            bubbles.push(new Bubble(0, 0, 140, 'blue', 'double click to add a bubble, click to change or drag', true));
+            upd_saves();
+            load(mode);
+            // auto-save
+            setInterval(function(){save(title);}, 5000);
+            // introductory bubble
+            if (! bubbles.length)
+                bubbles.push(new Bubble(0, 0, 140, 'blue', 'double click to add a bubble\nclick to change or drag', true));
             // make bubbles draggable
             drag_and_select();
         }
@@ -479,13 +651,15 @@
 /*
  TODO...
 
+ new / save-as / clear
  pan is jumpy
- multi-line description entry, multi-line display in bubbles
  choose which bubble to drift toward
- start in demo mode
-   start button, save/restore
- ground-down mode, or place a boundary
+
+ save slots
+ better color chooser
+ demo mode
  hover to see details
+ ground-down mode, or place a boundary
  JIRA link per bubble
 
  instructions
