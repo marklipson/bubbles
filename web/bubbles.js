@@ -12,7 +12,7 @@
     // margin around bubbles
     let bubble_outer_margin = 4;
     // overall reduction of force
-    let inertia = 0.5;
+    let inertia = 0.3;
     // stickiness of background - forces less than this will be ignored
     let bg_friction = 0.4;
     // available colors
@@ -151,6 +151,7 @@
             this.squish = [];
             this.change_size = 0;
             this.popping = 0;
+            this.jiggling = null;
             this.restore_surface();
         }
         restore_surface() {
@@ -329,6 +330,18 @@
                         popped.push(bbl);
                 }
             }
+            if (this.jiggling) {
+                this.jiggling[1] -= dt * this.jiggling[2];
+                if (this.jiggling[1] < 0) {
+                    this.r = this.jiggling[0];
+                    this.r2 = this.r ** 2;
+                    this.jiggling = null;
+                } else {
+                    const r_j = this.jiggling[0] * 0.8 * Math.sin(this.jiggling[1]);
+                    this.r = this.jiggling[0] + r_j;
+                    this.r2 = this.r ** 2;
+                }
+            }
         }
     }
     function overbubble(x, y) {
@@ -427,6 +440,14 @@
                 bubble.restore_surface();
             });
             area.appendChild(btn_pop);
+            // jiggle
+            const btn_jiggle = document.createElement("button");
+            btn_jiggle.innerText = "puff"
+            btn_jiggle.addEventListener("click", function() {
+                bubble.jiggling = [bubble.r, 6.283*0.5, 2];
+                bubble.restore_surface();
+            });
+            area.appendChild(btn_jiggle);
             //
             if (bubble.selected) {
                 setTimeout(refresh, 60000);
@@ -622,6 +643,7 @@
         setInterval(function(){ frame(); }, 50);
         if (mode === "_demo_") {
             bubbles.push(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
+            save_popped = false;
             for (var nb=0; nb < 25; nb++)
                 add_random_bubble();
             function updates() {
@@ -635,6 +657,7 @@
             setInterval(updates, 150);
         } else {
             upd_saves();
+            save_popped = true;
             load(mode);
             // auto-save
             setInterval(function(){save(title);}, 5000);
@@ -651,18 +674,20 @@
 /*
  TODO...
 
- new / save-as / clear
  pan is jumpy
  choose which bubble to drift toward
+ back/fwd browser button support: listen on hashchange & change selected bubbleset
+ hold down bigger/smaller/etc. buttons
+ view popped bubbles as table, delete to trash
+ give bubbles an ID: crypto.randomUUID()
 
- save slots
  better color chooser
- demo mode
  hover to see details
  ground-down mode, or place a boundary
  JIRA link per bubble
 
  instructions
    double click to create new bubble
+   link to demo mode
 
  */
