@@ -111,6 +111,37 @@
         the_context.setTransform(zoom, 0, 0, zoom, pan[0], pan[1]);
     }
     // utilities
+    /**
+     * Click-and-hold adapter for buttons.  Calls first(), then repeatedly calls every() while clicked, then last().
+     * @param button        Button to watch.
+     * @param first         Called when clicked down.
+     * @param every         Called while being held down.
+     * @param last          Called when unclicked.
+     * @param delay         Delay between calls while held down.
+     */
+    function button_hold_events(button, first, every, last, delay=250) {
+        var t_click = null;
+        var int_every = null;
+        button.addEventListener("mousedown", function() {
+            t_click = new Date().getTime();
+            int_every = setInterval(function(){
+                const t_now = new Date().getTime() - t_click;
+                if (every)
+                    every(t_now);
+            }, delay);
+            if (first)
+                first();
+        });
+        function stop() {
+            clearInterval(int_every);
+            int_every = null;
+            const t_now = new Date().getTime() - t_click;
+            if (last)
+                last(t_now);
+        }
+        button.addEventListener("mouseup", stop);
+        button.addEventListener("mouseout", stop);
+    }
     function surface_tension(surface, fuzz) {
         let i = surface;
         let o = i;
@@ -151,7 +182,6 @@
             this.squish = [];
             this.change_size = 0;
             this.popping = 0;
-            this.jiggling = null;
             this.restore_surface();
         }
         restore_surface() {
@@ -330,18 +360,6 @@
                         popped.push(bbl);
                 }
             }
-            if (this.jiggling) {
-                this.jiggling[1] -= dt * this.jiggling[2];
-                if (this.jiggling[1] < 0) {
-                    this.r = this.jiggling[0];
-                    this.r2 = this.r ** 2;
-                    this.jiggling = null;
-                } else {
-                    const r_j = this.jiggling[0] * 0.8 * Math.sin(this.jiggling[1]);
-                    this.r = this.jiggling[0] + r_j;
-                    this.r2 = this.r ** 2;
-                }
-            }
         }
     }
     function overbubble(x, y) {
@@ -375,19 +393,47 @@
             })
             area.appendChild(edit_text);
             area.appendChild(document.createElement("br"));
-            // bigger/smaller
+            // bigger/smaller/puff up
             const btn_smaller = document.createElement("button");
             btn_smaller.innerText = "smaller"
-            btn_smaller.addEventListener("click", function() {
+            button_hold_events(btn_smaller, function(){
                 bubble.change_size = -bubble.r * 0.10;
-            });
+            }, function(d) {
+                bubble.change_size = -bubble.r * 0.10;
+            }, null, 500);
             area.appendChild(btn_smaller);
+            // - bigger
             const btn_bigger = document.createElement("button");
             btn_bigger.innerText = "bigger"
-            btn_bigger.addEventListener("click", function() {
+            button_hold_events(btn_bigger, function(){
                 bubble.change_size = bubble.r * 0.10;
-            });
+            }, function(d) {
+                bubble.change_size = bubble.r * 0.10;
+            }, null, 500);
             area.appendChild(btn_bigger);
+            // - puff
+            const btn_puff = document.createElement("button");
+            btn_puff.innerText = "puff"
+            var save_r = null;
+            button_hold_events(btn_puff,
+                function(){
+                    save_r = bubble.r;
+                }, function(d){
+                    bubble.r *= 1.025;
+                    bubble.r2 = bubble.r ** 2;
+                }, function(d){
+                    function down(){
+                        bubble.r /= 1.025;
+                        if (bubble.r > save_r)
+                            setTimeout(down, 50);
+                        else
+                            bubble.r = save_r;
+                        bubble.r2 = bubble.r ** 2;
+                    }
+                    setTimeout(down, 50);
+                },
+                50);
+            area.appendChild(btn_puff);
             area.appendChild(document.createElement("br"));
             // weight
             const edit_weight = document.createElement("input");
@@ -440,14 +486,6 @@
                 bubble.restore_surface();
             });
             area.appendChild(btn_pop);
-            // jiggle
-            const btn_jiggle = document.createElement("button");
-            btn_jiggle.innerText = "puff"
-            btn_jiggle.addEventListener("click", function() {
-                bubble.jiggling = [bubble.r, 6.283*0.5, 2];
-                bubble.restore_surface();
-            });
-            area.appendChild(btn_jiggle);
             //
             if (bubble.selected) {
                 setTimeout(refresh, 60000);
