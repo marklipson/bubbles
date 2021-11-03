@@ -1,6 +1,6 @@
 (function(){
     // overall gravity toward center
-    let to_center = 18;
+    let to_center = 0;   // originally 18
     // closer to 1: free floating, closer to 0: lots of friction - atmospheric friction?
     let v_friction = 0.3;
     // how hard bubbles push one another away when touching
@@ -15,6 +15,8 @@
     let inertia = 0.3;
     // stickiness of background - forces less than this will be ignored
     let bg_friction = 0.4;
+    // minimum bubble size
+    let min_bubble_r = 15;
     // available colors
     const r_colors = [
         "black", "gray", "lightgray",
@@ -95,7 +97,7 @@
             const b = data.bubbles[nb];
             if (b === null || b.x === null)
                 continue;
-            const b_new = new Bubble(b.x, b.y, b.r, b.color, b.text, b.fixed, b.weight, b.bounce)
+            const b_new = new Bubble(b.x, b.y, b.r, b.color, b.text, b.fixed, b.weight, b.bounce, b.gravity);
             bubbles.push(b_new);
         }
         popped = data.popped;
@@ -120,27 +122,119 @@
      * @param delay         Delay between calls while held down.
      */
     function button_hold_events(button, first, every, last, delay=250) {
-        var t_click = null;
-        var int_every = null;
-        button.addEventListener("mousedown", function() {
+        let t_click = null;
+        let tmr_every = null;
+        let running = false;
+        function on_every() {
+            if (! running)
+                return;
+            const t_now = new Date().getTime() - t_click;
+            if (t_now > 15000)
+                stop();
+            every();
+            tmr_every = setTimeout(on_every, delay);
+        }
+        function start() {
+            running = true;
             t_click = new Date().getTime();
-            int_every = setInterval(function(){
-                const t_now = new Date().getTime() - t_click;
-                if (every)
-                    every(t_now);
-            }, delay);
+            if (every)
+                tmr_every = setTimeout(on_every, delay);
             if (first)
                 first();
-        });
-        function stop() {
-            clearInterval(int_every);
-            int_every = null;
-            const t_now = new Date().getTime() - t_click;
-            if (last)
-                last(t_now);
         }
+        function stop() {
+            if (! running)
+                return;
+            running = false;
+            clearTimeout(tmr_every);
+            if (last)
+                last();
+        }
+        button.addEventListener("mousedown", start);
         button.addEventListener("mouseup", stop);
         button.addEventListener("mouseout", stop);
+        button.addEventListener("blur", stop);
+    }
+    /**
+     * Do something every interval while button is clicked.
+     */
+    function button_repeater(button, fn, delay) {
+        return button_hold_events(button, fn, fn, null, delay);
+    }
+
+    /**
+     * Logarithmically adjust a value.
+     */
+    function edit_value(name, getter, setter, area, vmin, vmax) {
+        const edit = document.createElement("input");
+        edit.setAttribute("type", "number");
+        function set_v(vw) {
+            vw = Math.min(vw, vmax);
+            vw = Math.max(vw, vmin);
+            vw = Math.round(vw*100)/100;
+            setter(vw);
+            edit.value = vw.toFixed(2);
+        }
+        edit.addEventListener("change", function() {
+            set_v(parseFloat(edit_weight.value));
+        })
+        set_v(getter());
+        const btn_up = document.createElement("button");
+        btn_up.innerText = "+"
+        btn_up.addEventListener("click", function() {
+            if (vmin <= 0)
+                set_v(getter() + 1);
+            else
+                set_v(getter() * 1.2);
+        });
+        const btn_down = document.createElement("button");
+        btn_down.innerText = "-"
+        btn_down.addEventListener("click", function() {
+            if (vmin <= 0)
+                set_v(getter() - 1);
+            else
+                set_v(getter() / 1.2);
+        });
+        const lbl = document.createElement("span");
+        lbl.innerText = name + ": ";
+        area.appendChild(lbl);
+        area.appendChild(btn_down);
+        area.appendChild(edit);
+        area.appendChild(btn_up);
+    }
+
+    /**
+     * Choose color.
+     */
+    function choose_color(getter, setter, area) {
+        const boxes = [];
+        function upd(c) {
+            setter(c);
+            for (var n=0; n < boxes.length; n++) {
+                if (boxes[n].getAttribute("data-color") == c)
+                    boxes[n].style.borderColor = "black";
+                else
+                    boxes[n].style.borderColor = "rgba(0,0,0,0)";
+            }
+        }
+        for (var n=0; n < r_colors.length; n++) {
+            const box = document.createElement("span");
+            box.innerText = "\u00a0";
+            box.style.display = "inline-block";
+            box.style.cursor = "pointer";
+            box.style.width = "12px";
+            box.style.height = "12px";
+            box.style.border = "solid 2px rgba(0,0,0,0)";
+            box.style.backgroundColor = r_colors[n];
+            box.setAttribute("data-color", r_colors[n]);
+            box.addEventListener("click", function(evt){
+                const c = evt.target.getAttribute("data-color");
+                upd(c);
+            });
+            boxes.push(box);
+            area.appendChild(box);
+        }
+        upd(getter());
     }
     function surface_tension(surface, fuzz) {
         let i = surface;
@@ -163,11 +257,13 @@
     }
     //
     class Bubble {
-        constructor(x, y, r, color, text="", fixed=false, weight=1, bounce=1) {
+        constructor(x, y, r, color, text="", fixed=false, weight=1, bounce=1, gravity=0) {
             this.x = x;
             this.y = y;
             this.vx = 0;
             this.vy = 0;
+            if (r < min_bubble_r)
+                r = min_bubble_r;
             this.r = r;
             this.r2 = r*r;
             this.color = color;
@@ -175,6 +271,8 @@
             this.weight = weight;
             this.bounce = bounce;
             this.fixed = fixed;
+            this.gravity = gravity;
+            this.created_at = new Date().getTime();
             this.popped_at = null;
             // view-related
             this.dragging = false;
@@ -243,7 +341,15 @@
             }
             else if (this.selected) {
                 ctx.fillStyle = sel_color;
+                ctx.globalAlpha = 0.8;
                 ctx.fill()
+                ctx.globalAlpha = 1;
+            }
+            else {
+                ctx.fillStyle = "white";
+                ctx.globalAlpha = 0.4;
+                ctx.fill()
+                ctx.globalAlpha = 1;
             }
             const w_h = bubble_wall * Math.max(0.1, Math.log(4*this.weight));
             ctx.lineWidth = w_h;
@@ -260,9 +366,10 @@
             }
             if (! this.popping) {
                 ctx.textAlign = "center";
-                ctx.fillStyle = this.selected ? 'black' : '#606060';
+                ctx.fillStyle = this.selected ? 'black' : '#404040';
                 let margin = 25;
-                let lines = this.text.trim().split("\n");
+                let draw_text = this.text;
+                let lines = draw_text.trim().split("\n");
                 let line_height = 16;
                 ctx.font = line_height + "px sans-serif";
                 const max_lines = Math.floor((2*this.r - margin) / line_height);
@@ -293,7 +400,6 @@
                     continue;
                 const dx = b.x - a.x, dy = b.y - a.y;
                 const r2 = dx*dx + dy*dy;
-                // away from other bubbles
                 const ab_r2 = a.r2 + b.r2 + 2*a.r*b.r;
                 const closeness = r2 - ab_r2;
                 const d = Math.sqrt(dx*dx+dy*dy);
@@ -310,6 +416,9 @@
                     // mild repulsion
                     f_a = repulsion * dt * 10 / (closeness + 10);
                 }
+                if (b.gravity) {
+                    f_a += -b.gravity * 5 * dt * 0.5**(d/500) * Math.sqrt(this.weight);
+                }
                 if (f_a) {
                     fx -= f_a * dx/d;
                     fy -= f_a * dy/d;
@@ -320,7 +429,7 @@
                 return [0, 0];
             // toward center
             const d0 = Math.sqrt(a.x*a.x + a.y*a.y);
-            if (d0 > 30) {
+            if (to_center && d0 > 30) {
                 const f0c = dt * to_center * this.weight;
                 fx -= f0c * a.x/d0;
                 fy -= f0c * a.y/d0;
@@ -340,14 +449,19 @@
             this.vx *= friction;
             this.vy *= friction;
             if (this.change_size) {
-                let amt = dt * 0.8 * this.change_size;
-                if (Math.abs(amt) > Math.abs(this.change_size))
+                let amt = 0;
+                if (Math.abs(this.change_size) < 1)
                     amt = this.change_size;
+                else
+                    amt = dt * 0.8 * this.change_size;
                 this.r += amt;
-                this.r2 = this.r**2;
+                if (this.r < min_bubble_r)
+                    this.r = min_bubble_r;
+                this.r2 = this.r ** 2;
                 this.change_size -= amt;
             }
             if (this.popping) {
+                console.log("popping")
                 const expand = 0.3 ** dt;
                 this.r *= expand;
                 this.r2 = this.r ** 2;
@@ -363,6 +477,8 @@
         }
     }
     function overbubble(x, y) {
+        let best = null;
+        let d_best = null;
         for (var nb=0; nb < bubbles.length; nb++) {
             const b = bubbles[nb];
             const d2 = (x-b.x)*(x-b.x)+(y-b.y)*(y-b.y);
@@ -371,11 +487,14 @@
                     let clk_a = Math.atan2(y - b.y, x - b.x) * b.squish.length / 6.284;
                     clk_a = Math.floor((clk_a + b.squish.length) % b.squish.length);
                     const clk_r = b.squish[clk_a];
-                    if (d2 < clk_r*clk_r)
-                        return b;
+                    if (d2 < clk_r*clk_r  &&  (! best || d2 < d_best)) {
+                        best = b;
+                        d_best = d2;
+                    }
                 }
             }
         }
+        return best;
     }
     function draw_bubble_form(bubble, area) {
         function refresh() {
@@ -393,23 +512,22 @@
             })
             area.appendChild(edit_text);
             area.appendChild(document.createElement("br"));
+            // color
+            choose_color(function(){ return bubble.color; }, function(c){ bubble.color = c; }, area);
+            area.appendChild(document.createElement("br"));
             // bigger/smaller/puff up
             const btn_smaller = document.createElement("button");
             btn_smaller.innerText = "smaller"
-            button_hold_events(btn_smaller, function(){
-                bubble.change_size = -bubble.r * 0.10;
-            }, function(d) {
-                bubble.change_size = -bubble.r * 0.10;
-            }, null, 500);
+            button_repeater(btn_smaller, function(){
+                bubble.change_size -= bubble.r * 0.15;
+            }, 500);
             area.appendChild(btn_smaller);
             // - bigger
             const btn_bigger = document.createElement("button");
             btn_bigger.innerText = "bigger"
-            button_hold_events(btn_bigger, function(){
-                bubble.change_size = bubble.r * 0.10;
-            }, function(d) {
-                bubble.change_size = bubble.r * 0.10;
-            }, null, 500);
+            button_repeater(btn_bigger, function(){
+                bubble.change_size += bubble.r * 0.15;
+            }, 500);
             area.appendChild(btn_bigger);
             // - puff
             const btn_puff = document.createElement("button");
@@ -436,41 +554,11 @@
             area.appendChild(btn_puff);
             area.appendChild(document.createElement("br"));
             // weight
-            const edit_weight = document.createElement("input");
-            edit_weight.setAttribute("type", "number");
-            edit_weight.value = bubble.weight.toFixed(1);
-            function set_w(vw) {
-                vw = Math.min(vw, 20);
-                vw = Math.max(vw, 0.2);
-                edit_weight.value = bubble.weight.toFixed(1);
-                bubble.weight = vw;
-            }
-            edit_weight.addEventListener("change", function() {
-                let vw = parseFloat(edit_weight.value);
-                set_w(vw);
-            })
-            const btn_heavier = document.createElement("button");
-            btn_heavier.innerText = "heavier"
-            btn_heavier.addEventListener("click", function() {
-                set_w(bubble.weight *= 1.2);
-            });
-            const btn_lighter = document.createElement("button");
-            btn_lighter.innerText = "lighter"
-            btn_lighter.addEventListener("click", function() {
-                set_w(bubble.weight *= 0.8);
-            });
-            area.appendChild(btn_lighter);
-            area.appendChild(edit_weight);
-            area.appendChild(btn_heavier);
+            edit_value("weight", function(){ return bubble.weight; }, function(v){ bubble.weight = v; }, area, 0.1, 10.0);
             area.appendChild(document.createElement("br"));
-            // color
-            const btn_color = document.createElement("button");
-            btn_color.innerText = "color"
-            btn_color.addEventListener("click", function() {
-                let nc = r_colors.indexOf(bubble.color);
-                bubble.color = r_colors[nc+1];
-            });
-            area.appendChild(btn_color);
+            // gravity
+            edit_value("gravity",function(){ return bubble.gravity; }, function(v){ bubble.gravity = v; }, area, 0, 10);
+            area.appendChild(document.createElement("br"));
             // pinned
             const btn_pinned = document.createElement("button");
             btn_pinned.innerText = "pinned"
@@ -607,7 +695,7 @@
                 onbubble.vy = 0;
                 start = [pos[0] - onbubble.x, pos[1] - onbubble.y];
             }
-            move00 = [pos[0], pos[1], new Date().getTime()]
+            move00 = [evt.x, evt.y, new Date().getTime()]
             move0 = move1 = null;
             pan0 = [pan[0], pan[1]];
         });
@@ -620,15 +708,16 @@
                     const dx = move1[0] - move0[0];
                     const dy = move1[1] - move0[1];
                     const dt = move1[2] - move0[2];
-                    onbubble.vx += 20*dx*onbubble.weight / dt;
-                    onbubble.vy += 20*dy*onbubble.weight / dt;
+                    const w_factor = 2 * onbubble.weight**0.1;
+                    onbubble.vx += 20*dx*w_factor / dt;
+                    onbubble.vy += 20*dy*w_factor / dt;
                 }
             }
             onbubble = null;
         });
         canvas.addEventListener("mousemove", function(evt){
             const pos = to_ctx_coords(evt);
-            const move = [pos[0], pos[1], new Date().getTime()]
+            const move = [evt.x, evt.y, new Date().getTime()]
             move0 = move1;
             move1 = move;
             if (onbubble) {
@@ -649,7 +738,8 @@
         const ctx = the_context;
         const z = zoom;
         //ctx.clearRect(-the_canvas.width/2, -the_canvas.height/2, the_canvas.width, the_canvas.height)
-        ctx.clearRect(-pan[0]/z, -pan[1]/z, the_canvas.width/z, the_canvas.height/z)
+        ctx.fillStyle = "#e0e0e0";
+        ctx.fillRect(-pan[0]/z, -pan[1]/z, the_canvas.width/z, the_canvas.height/z)
         const t = new Date().getTime();
         const dt = Math.min(t - t0, 0.1);
         const friction = v_friction**dt;
@@ -701,7 +791,7 @@
             setInterval(function(){save(title);}, 5000);
             // introductory bubble
             if (! bubbles.length)
-                bubbles.push(new Bubble(0, 0, 140, 'blue', 'double click to add a bubble\nclick to change or drag', true));
+                bubbles.push(new Bubble(0, 0, 140, 'blue', 'double click to add a bubble\nclick to change or drag', true, 1, 1, 5));
             // make bubbles draggable
             drag_and_select();
         }
@@ -712,14 +802,12 @@
 /*
  TODO...
 
- pan is jumpy
- choose which bubble to drift toward
+ grid
+ coordinates
+ pinned button should toggle in appearance
  back/fwd browser button support: listen on hashchange & change selected bubbleset
- hold down bigger/smaller/etc. buttons
  view popped bubbles as table, delete to trash
- give bubbles an ID: crypto.randomUUID()
 
- better color chooser
  hover to see details
  ground-down mode, or place a boundary
  JIRA link per bubble
