@@ -18,7 +18,7 @@
             display: none;
             top: 0;
             right: 0;
-            opacity: 0.9;
+            opacity: 0.7;
             border: solid 3px #c0c060;
             background-color: #ffff80;
             color: #808040;
@@ -49,6 +49,9 @@
             font-weight: bold;
             margin-bottom: 4px;
         }
+        #data-frame {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -58,9 +61,17 @@
         <input id="title"/>
         <select id="saves"></select><br/>
         <button id="new-file">new</button><br/>
+        <button id="delete-file">del</button><br/>
+        <button id="show-grid">grid</button><br/>
         <button id="zoom-in" class="btn-zoom">+</button><br/>
         <button id="zoom-out" class="btn-zoom">-</button><br/>
     </div>
     <div id="panel"></div>
+    <div id="data-frame">
+        <div id="data">
+            <table></table>
+            <!-- close button -->
+        </div>
+    </div>
 </body>
 </html>

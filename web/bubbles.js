@@ -17,6 +17,8 @@
     let bg_friction = 0.4;
     // minimum bubble size
     let min_bubble_r = 15;
+    // show grid
+    let show_grid = true;
     // available colors
     const r_colors = [
         "black", "gray", "lightgray",
@@ -36,6 +38,8 @@
     /////////
     // colors
     let sel_color = "rgba(255,255,128,128)";  // "#ffff80";
+    let bg_color = "#e0e0e0";
+    let grid_color = "#c0c0ff";
     // all bubbles
     let bubbles = [];
     let popped = [];
@@ -48,6 +52,14 @@
     let zoom = 1;
     let the_canvas = null;
     let the_context = null;
+    let capture_bubble_click = null;
+    function add_bubble(bubble) {
+        bubbles.push(bubble);
+    }
+    function delete_bubble(bubble) {
+        const nb = bubbles.indexOf(bubble);
+        return bubbles.splice(nb, 1);
+    }
     // load/save
     function all_saves() {
         const data = localStorage.getItem("saves");
@@ -97,8 +109,8 @@
             const b = data.bubbles[nb];
             if (b === null || b.x === null)
                 continue;
-            const b_new = new Bubble(b.x, b.y, b.r, b.color, b.text, b.fixed, b.weight, b.bounce, b.gravity);
-            bubbles.push(b_new);
+            const b_new = new Bubble(b.x, b.y, b.r, b.color, b.text, b.fixed, b.weight, b.bounce, b.gravity, b.uuid, b.stick_to);
+            add_bubble(b_new);
         }
         popped = data.popped;
     }
@@ -112,7 +124,6 @@
         zoom = z || zoom;
         the_context.setTransform(zoom, 0, 0, zoom, pan[0], pan[1]);
     }
-    // utilities
     /**
      * Click-and-hold adapter for buttons.  Calls first(), then repeatedly calls every() while clicked, then last().
      * @param button        Button to watch.
@@ -211,10 +222,13 @@
         function upd(c) {
             setter(c);
             for (var n=0; n < boxes.length; n++) {
-                if (boxes[n].getAttribute("data-color") == c)
-                    boxes[n].style.borderColor = "black";
-                else
-                    boxes[n].style.borderColor = "rgba(0,0,0,0)";
+                if (boxes[n].getAttribute("data-color") === c) {
+                    //boxes[n].style.borderColor = "black";
+                    boxes[n].style.boxShadow = "#404040 0px 3px 0px";
+                } else {
+                    //boxes[n].style.borderColor = "rgba(0,0,0,0)";
+                    boxes[n].style.boxShadow = "";
+                }
             }
         }
         for (var n=0; n < r_colors.length; n++) {
@@ -224,7 +238,7 @@
             box.style.cursor = "pointer";
             box.style.width = "12px";
             box.style.height = "12px";
-            box.style.border = "solid 2px rgba(0,0,0,0)";
+            //box.style.border = "solid 2px 2px 0 2px rgba(0,0,0,0)";
             box.style.backgroundColor = r_colors[n];
             box.setAttribute("data-color", r_colors[n]);
             box.addEventListener("click", function(evt){
@@ -257,7 +271,7 @@
     }
     //
     class Bubble {
-        constructor(x, y, r, color, text="", fixed=false, weight=1, bounce=1, gravity=0) {
+        constructor(x, y, r, color, text="", fixed=false, weight=1, bounce=1, gravity=0, uuid=null, stick_to=null) {
             this.x = x;
             this.y = y;
             this.vx = 0;
@@ -266,6 +280,8 @@
                 r = min_bubble_r;
             this.r = r;
             this.r2 = r*r;
+            this.uuid = uuid || crypto.randomUUID();
+            this.stick_to = stick_to;
             this.color = color;
             this.text = text;
             this.weight = weight;
@@ -341,13 +357,13 @@
             }
             else if (this.selected) {
                 ctx.fillStyle = sel_color;
-                ctx.globalAlpha = 0.8;
+                ctx.globalAlpha = 0.7;
                 ctx.fill()
                 ctx.globalAlpha = 1;
             }
             else {
-                ctx.fillStyle = "white";
-                ctx.globalAlpha = 0.4;
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = 0.3;
                 ctx.fill()
                 ctx.globalAlpha = 1;
             }
@@ -416,8 +432,14 @@
                     // mild repulsion
                     f_a = repulsion * dt * 10 / (closeness + 10);
                 }
-                if (b.gravity) {
-                    f_a += -b.gravity * 5 * dt * 0.5**(d/500) * Math.sqrt(this.weight);
+                if (b.gravity || b.uuid === this.stick_to) {
+                    const grav = b.gravity || 11;
+                    // if the target is not pinned we have to stop pushing or we'll just push the target around
+                    if (! b.fixed && closeness < 1000) {
+                        // inhibit gravity when very close if target is unpinned - otherwise it will get pushed around
+                    }
+                    else
+                        f_a += -grav * 5 * dt * 0.5**(d/500) * Math.sqrt(this.weight);
                 }
                 if (f_a) {
                     fx -= f_a * dx/d;
@@ -467,13 +489,46 @@
                 this.r2 = this.r ** 2;
                 this.popping *= expand;
                 if (this.popping < 0.1) {
-                    var nb = bubbles.indexOf(this);
-                    const bbl = bubbles.splice(nb, 1);
+                    const bbl = delete_bubble(this);
                     bbl.popped_at = new Date().getTime();
                     if (save_popped)
                         popped.push(bbl);
                 }
             }
+        }
+    }
+    function draw_grid() {
+        const ctx = the_context;
+        let x0 = -pan[0]/zoom;
+        let y0 = -pan[1]/zoom;
+        const grid_size = 100;
+        const w = the_canvas.width / zoom;
+        const h = the_canvas.height / zoom;
+        const n_x = Math.floor(w / grid_size) + 1;
+        const n_y = Math.floor(h / grid_size) + 1;
+        const gx0 = x0 - x0 % grid_size;
+        const gy0 = y0 - y0 % grid_size;
+        ctx.fillStyle = grid_color;
+        for (let ny=0; ny < n_y; ny++)
+            ctx.fillRect(x0, gy0 + ny*grid_size, w, 1);
+        for (let nx=0; nx < n_x; nx++)
+            ctx.fillRect(gx0 + nx*grid_size, y0, 1, h);
+    }
+    function frame() {
+        const ctx = the_context;
+        const z = zoom;
+        //ctx.clearRect(-the_canvas.width/2, -the_canvas.height/2, the_canvas.width, the_canvas.height)
+        ctx.fillStyle = bg_color;
+        ctx.fillRect(-pan[0]/z, -pan[1]/z, the_canvas.width/z, the_canvas.height/z)
+        const t = new Date().getTime();
+        const dt = Math.min(t - t0, 0.1);
+        const friction = v_friction**dt;
+        if (show_grid)
+            draw_grid();
+        t0 = t;
+        for (var nb=0; nb < bubbles.length; nb++){
+            bubbles[nb].move(dt, friction);
+            bubbles[nb].draw(ctx);
         }
     }
     function overbubble(x, y) {
@@ -561,11 +616,29 @@
             area.appendChild(document.createElement("br"));
             // pinned
             const btn_pinned = document.createElement("button");
-            btn_pinned.innerText = "pinned"
+            btn_pinned.innerText = bubble.fixed ? "PINNED" : "   pin   ";
             btn_pinned.addEventListener("click", function() {
                 bubble.fixed = ! bubble.fixed;
+                btn_pinned.innerText = bubble.fixed ? "PINNED" : "   pin   ";
             });
             area.appendChild(btn_pinned);
+            // stick-to
+            const btn_stick = document.createElement("button");
+            btn_stick.innerText = bubble.stick_to ? "unstick" : "stick-to";
+            btn_stick.addEventListener("click", function() {
+                if (bubble.stick_to)
+                    bubble.stick_to = null;
+                else {
+                    // let user click on a bubble
+                    capture_bubble_click = function(to_bubble) {
+                        if (to_bubble) {
+                            bubble.stick_to = to_bubble.uuid;
+                        }
+                    }
+                }
+                btn_stick.innerText = bubble.stick_to ? "unstick" : "stick-to";
+            });
+            area.appendChild(btn_stick);
             // pop bubble
             const btn_pop = document.createElement("button");
             btn_pop.innerText = "pop"
@@ -634,6 +707,12 @@
         });
         // rename on Enter/blur of title editor
         edt_title.addEventListener("blur", title_change);
+        // detect hash change from browser back/fwd buttons
+        window.addEventListener("hashchange", function(){
+            save();
+            clear();
+            setup();
+        });
         // switch
         save_sel.addEventListener("change", function(){
             if (save_sel.value === "")
@@ -655,6 +734,21 @@
             load(title);
             // bookmarkable
             window.location.hash = title;
+        });
+        // 'delete'
+        const btn_del = document.getElementById("delete-file");
+        btn_del.addEventListener("click", function(){
+            clear();
+            let saves = all_saves();
+            saves.splice(saves.indexOf(title), 1);
+            upd_saves(saves);
+            // return to default
+            load();
+        });
+        // 'grid'
+        const btn_grid = document.getElementById("show-grid");
+        btn_grid.addEventListener("click", function(){
+            show_grid = ! show_grid;
         });
         //
         function to_ctx_coords(evt) {
@@ -678,7 +772,7 @@
         function create_bubble(at) {
             const c = r_colors[Math.floor(Math.random()*r_colors.length)];
             const bubble = new Bubble(at[0], at[1], 50, c);
-            bubbles.push(bubble);
+            add_bubble(bubble);
             select_bubble(bubble);
         }
         canvas.addEventListener("dblclick", function(evt) {
@@ -688,7 +782,13 @@
             const pos = to_ctx_coords(evt);
             clicked = true;
             onbubble = overbubble(pos[0], pos[1]);
-            select_bubble(onbubble);
+            if (capture_bubble_click) {
+                // delegate the bubble click
+                capture_bubble_click(onbubble);
+                capture_bubble_click = null;
+            } else {
+                select_bubble(onbubble);
+            }
             if (onbubble) {
                 onbubble.dragging = true;
                 onbubble.vx = 0;
@@ -734,27 +834,19 @@
             }
         });
     }
-    function frame() {
-        const ctx = the_context;
-        const z = zoom;
-        //ctx.clearRect(-the_canvas.width/2, -the_canvas.height/2, the_canvas.width, the_canvas.height)
-        ctx.fillStyle = "#e0e0e0";
-        ctx.fillRect(-pan[0]/z, -pan[1]/z, the_canvas.width/z, the_canvas.height/z)
-        const t = new Date().getTime();
-        const dt = Math.min(t - t0, 0.1);
-        const friction = v_friction**dt;
-        t0 = t;
-        for (var nb=0; nb < bubbles.length; nb++){
-            bubbles[nb].move(dt, friction);
-            bubbles[nb].draw(ctx);
-        }
+    function show_popped() {
+        const area = document.getElementById("data-frame");
+        // display area
+        // populate the table
+        // button to un-pop or permanently delete
+        // close button
     }
     function add_random_bubble() {
         var px = Math.random()*900 - 450;
         var py = Math.random()*900 - 450;
         var r = Math.random()*80 + 20;
         var c = r_colors[Math.floor(Math.random()*r_colors.length)];
-        bubbles.push(new Bubble(px, py, r, c, ''));
+        add_bubble(new Bubble(px, py, r, c, ''));
     }
     function setup() {
         let mode = window.location.hash;
@@ -770,7 +862,7 @@
         // start bubble animations
         setInterval(function(){ frame(); }, 50);
         if (mode === "_demo_") {
-            bubbles.push(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
+            add_bubble(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
             save_popped = false;
             for (var nb=0; nb < 25; nb++)
                 add_random_bubble();
@@ -791,7 +883,7 @@
             setInterval(function(){save(title);}, 5000);
             // introductory bubble
             if (! bubbles.length)
-                bubbles.push(new Bubble(0, 0, 140, 'blue', 'double click to add a bubble\nclick to change or drag', true, 1, 1, 5));
+                add_bubble(new Bubble(0, 0, 140, 'blue', 'double click to add a bubble\nclick to change or drag', true, 1, 1, 5));
             // make bubbles draggable
             drag_and_select();
         }
@@ -802,15 +894,19 @@
 /*
  TODO...
 
- grid
- coordinates
- pinned button should toggle in appearance
- back/fwd browser button support: listen on hashchange & change selected bubbleset
- view popped bubbles as table, delete to trash
+ stick-to button needs to say 'now click on a bubble'
+ stick-to button should say which button it's stuck to (stuck to: ____)
+ stick-to needs a graphical representation, like an arrow or bulge or something
+ stick-to chases its target - it needs to 'just go there' I think, as if it were being dragged
 
+ view popped bubbles as table, delete to trash
+   see show_popped()
+ better selection graphic, like bouncing arrows, so you can see the proper bg color
  hover to see details
+
  ground-down mode, or place a boundary
  JIRA link per bubble
+ coordinates
 
  instructions
    double click to create new bubble
