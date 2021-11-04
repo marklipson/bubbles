@@ -240,8 +240,9 @@
             box.innerText = "\u00a0";
             box.style.display = "inline-block";
             box.style.cursor = "pointer";
-            box.style.width = "12px";
-            box.style.height = "12px";
+            box.style.width = "16px";
+            box.style.height = "16px";
+            box.style.marginBottom = "6px";
             //box.style.border = "solid 2px 2px 0 2px rgba(0,0,0,0)";
             box.style.backgroundColor = r_colors[n];
             box.setAttribute("data-color", r_colors[n]);
@@ -522,7 +523,9 @@
             return [fx, fy];
         }
         move(dt, friction) {
-            const force = this.forces(dt);
+            let force = this.forces(dt);
+            if (isNaN(force[0]) || isNaN(force[1]))
+                force = [0, 0];
             this.vx += force[0];
             this.vy += force[1];
             this.x += this.vx * inertia;
@@ -615,7 +618,7 @@
             if (! bubble.selected)
                 return;
             var h = "";
-            h += "<div class='title'>Edit Bubble Data</div>";
+            h += "<div class='title'>Edit Bubble</div>";
             area.innerHTML = h;
             // edit title
             const edit_text = document.createElement("textarea");
@@ -726,6 +729,10 @@
         var panel = document.getElementById("panel");
         // set up tools
         function change_zoom(by, steps) {
+            if (zoom < 0.1 && by < 1)
+                return;
+            if (zoom > 10 &&  by > 1)
+                return;
             const w = canvas.width/2;
             const h = canvas.height/2;
             let r = Math.exp(Math.log(by)/steps);
@@ -907,8 +914,7 @@
                 // pan
                 const dx = move[0] - move00[0];
                 const dy = move[1] - move00[1];
-                const z = zoom;
-                set_pan_zoom(pan0[0] + dx*z, pan0[1] + dy*z);
+                set_pan_zoom(pan0[0] + dx, pan0[1] + dy);
             }
         });
     }
@@ -972,21 +978,26 @@
 /*
  TODO...
 
- pop bubble - others might be stuck to it
-
  deletion needs a warning, and needs testing - clicking it a few times will delete random entries
-
- it has frozen up a couple times and you can't select anything
-
  view popped bubbles as table, delete to trash
    see show_popped()
+ zoom is still off if you back up far enough
 
+ stick-to force needs to be symmetrical
+ pop bubble - others might be stuck to it
+ save/load options
+ it has frozen up a couple times and you can't select anything
  energy is leaking into the system, causing bubbles to spin instead of settle down (not enough entropy somewhere)
+ gravity and weight could be combined
+ more colors, no light gray
+ optimize - don't paint off-screen stuff
+ pop animation w particle effects
 
  option to show off-screen bubbles (thin arrows around the edge of the page, possibly with labels)
 
  stick-to button needs to say 'now click on a bubble'
  stick-to button should say which button it's stuck to (stuck to: ____)
+ surface tension
 
  bubbles are still being chased (some were running away)
  better selection graphic, like bouncing arrows, so you can see the proper bg color
