@@ -40,6 +40,8 @@
     let sel_color = "rgba(255,255,128,128)";  // "#ffff80";
     let bg_color = "#e0e0e0";
     let grid_color = "#c0c0ff";
+    //
+    let frame_rate = 40;
     // all bubbles
     let bubbles = [];
     let popped = [];
@@ -50,9 +52,11 @@
     //view
     let pan = [0, 0];
     let zoom = 1;
+    var move00 = null, move0 = null, move1 = null;
     let the_canvas = null;
     let the_context = null;
     let capture_bubble_click = null;
+    let ltd_bubble_index = {};
     function add_bubble(bubble) {
         bubbles.push(bubble);
     }
@@ -332,8 +336,27 @@
         }
         draw(ctx) {
             const r = this.r - bubble_outer_margin;
+            // indicator of bubble selection
+            if ((capture_bubble_click  &&  capture_bubble_click.source === this) || (this.selected && this.stick_to)) {
+                ctx.strokeStyle = "red";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                if (capture_bubble_click) {
+                    const tx = move1[0] - move00[0];
+                    const ty = move1[1] - move00[1];
+                    ctx.lineTo(this.x + tx, this.y + ty);
+                } else if (ltd_bubble_index[this.stick_to]) {
+                    const tx = ltd_bubble_index[this.stick_to].x;
+                    const ty = ltd_bubble_index[this.stick_to].y;
+                    ctx.lineTo(tx, ty);
+                }
+                ctx.stroke();
+            }
+            // trace outline of bubble
             ctx.beginPath();
             if (this.squish) {
+                // non-circular
                 ctx.lineCap = "round";
                 let npts = this.squish.length;
                 let a = 0, da = 6.28318 / npts;
@@ -349,30 +372,35 @@
                 if (this.selected)
                     ctx.closePath();
             } else {
+                // circular
                 ctx.ellipse(this.x, this.y, r - bubble_wall, r - bubble_wall, 0, 0, 6.284);
                 ctx.closePath();
             }
             if (this.popping) {
-                // hm
+                // no fill while popping
             }
             else if (this.selected) {
+                // selected fill
                 ctx.fillStyle = sel_color;
                 ctx.globalAlpha = 0.7;
                 ctx.fill()
                 ctx.globalAlpha = 1;
             }
             else {
+                // normal fill
                 ctx.fillStyle = this.color;
                 ctx.globalAlpha = 0.3;
                 ctx.fill()
                 ctx.globalAlpha = 1;
             }
+            // draw border
             const w_h = bubble_wall * Math.max(0.1, Math.log(4*this.weight));
             ctx.lineWidth = w_h;
             if (this.popping)
                 ctx.lineWidth = 1;
             ctx.strokeStyle = this.color;
             ctx.stroke();
+            // pinned/fixed: show a dashed line inside the border
             if (this.fixed) {
                 ctx.lineWidth = ctx.lineWidth / 3;
                 ctx.strokeStyle = "white"
@@ -380,6 +408,29 @@
                 ctx.stroke();
                 ctx.setLineDash([])
             }
+            // pointer toward stuck-to bubble
+            if (this.stick_to  &&  ltd_bubble_index[this.stick_to]) {
+                const dx = ltd_bubble_index[this.stick_to].x - this.x;
+                const dy = ltd_bubble_index[this.stick_to].y - this.y;
+                const color = ltd_bubble_index[this.stick_to].color;
+                let r = this.r;
+                const a = Math.atan2(dy, dx)
+                if (this.squish) {
+                    let a_r = a * this.squish.length / 6.284;
+                    a_r = Math.floor((a_r + this.squish.length) % this.squish.length);
+                    r = this.squish[a_r];
+                }
+                const px = this.x + r * Math.cos(a);
+                const py = this.y + r * Math.sin(a);
+                ctx.beginPath();
+                ctx.moveTo(px, py);
+                ctx.lineTo(this.x + r*0.9*Math.cos(a-0.1), this.y + r*0.9*Math.sin(a-0.1));
+                ctx.lineTo(this.x + r*0.9*Math.cos(a+0.1), this.y + r*0.9*Math.sin(a+0.1));
+                ctx.closePath();
+                ctx.fillStyle = color;
+                ctx.fill();
+            }
+            // text
             if (! this.popping) {
                 ctx.textAlign = "center";
                 ctx.fillStyle = this.selected ? 'black' : '#404040';
@@ -410,6 +461,7 @@
             this.restore_surface();
             if (this.popping)
                 return [0, 0];
+            ltd_bubble_index = {};
             for (var nb=0; nb < bubbles.length; nb++){
                 const b = bubbles[nb];
                 if (a === b  ||  b.popping)
@@ -432,14 +484,21 @@
                     // mild repulsion
                     f_a = repulsion * dt * 10 / (closeness + 10);
                 }
-                if (b.gravity || b.uuid === this.stick_to) {
+                // stuck to another bubble - follow closely
+                if (b.uuid === this.stick_to) {
+                    ltd_bubble_index[b.uuid] = b;
+                    if (closeness > 200)
+                        f_a = -((closeness - 200)/200) * dt;
+                }
+                // gravity toward other bubble
+                else if (b.gravity) {
                     const grav = b.gravity || 11;
                     // if the target is not pinned we have to stop pushing or we'll just push the target around
                     if (! b.fixed && closeness < 1000) {
                         // inhibit gravity when very close if target is unpinned - otherwise it will get pushed around
                     }
                     else
-                        f_a += -grav * 5 * dt * 0.5**(d/500) * Math.sqrt(this.weight);
+                        f_a += -grav * 5 * dt * 0.5**((d-b.r)/500) * Math.sqrt(this.weight);
                 }
                 if (f_a) {
                     fx -= f_a * dx/d;
@@ -612,7 +671,7 @@
             edit_value("weight", function(){ return bubble.weight; }, function(v){ bubble.weight = v; }, area, 0.1, 10.0);
             area.appendChild(document.createElement("br"));
             // gravity
-            edit_value("gravity",function(){ return bubble.gravity; }, function(v){ bubble.gravity = v; }, area, 0, 10);
+            edit_value("gravity",function(){ return bubble.gravity; }, function(v){ bubble.gravity = v; }, area, 0, 20);
             area.appendChild(document.createElement("br"));
             // pinned
             const btn_pinned = document.createElement("button");
@@ -630,9 +689,13 @@
                     bubble.stick_to = null;
                 else {
                     // let user click on a bubble
-                    capture_bubble_click = function(to_bubble) {
-                        if (to_bubble) {
-                            bubble.stick_to = to_bubble.uuid;
+                    capture_bubble_click = {
+                        mode: "stick-to",
+                        source: bubble,
+                        selected: function(to_bubble) {
+                            if (to_bubble) {
+                                bubble.stick_to = to_bubble.uuid;
+                            }
                         }
                     }
                 }
@@ -658,16 +721,29 @@
         const canvas = the_canvas
         var onbubble = null;
         var start = null;
-        var move00 = null, move0 = null, move1 = null;
         var pan0 = null;
         var clicked = false;
         var panel = document.getElementById("panel");
         // set up tools
+        function change_zoom(by, steps) {
+            const w = canvas.width/2;
+            const h = canvas.height/2;
+            let r = Math.exp(Math.log(by)/steps);
+            function change(){
+                console.log(r);
+                set_pan_zoom((pan[0] - w)/r + w, (pan[1] - h)/r + h, zoom*r);
+                if (steps > 0) {
+                    setTimeout(change, frame_rate);
+                    steps -= 1;
+                }
+            }
+            change();
+        }
         document.getElementById("zoom-in").addEventListener("click", function(){
-            set_pan_zoom(pan[0], pan[1], zoom*1.25)
+            change_zoom(1.25, 12)
         });
         document.getElementById("zoom-out").addEventListener("click", function(){
-            set_pan_zoom(pan[0], pan[1], zoom*(1/1.25))
+            change_zoom(1/1.25, 12);
         });
         const edt_title = document.getElementById("title");
         const save_sel = document.getElementById("saves");
@@ -719,6 +795,8 @@
                 return;
             save(title);
             load(save_sel.value);
+            // bookmarkable
+            window.location.hash = title;
         });
         // 'new'
         const btn_new = document.getElementById("new-file");
@@ -744,6 +822,7 @@
             upd_saves(saves);
             // return to default
             load();
+            window.location.hash = title;
         });
         // 'grid'
         const btn_grid = document.getElementById("show-grid");
@@ -784,7 +863,7 @@
             onbubble = overbubble(pos[0], pos[1]);
             if (capture_bubble_click) {
                 // delegate the bubble click
-                capture_bubble_click(onbubble);
+                capture_bubble_click.selected(onbubble);
                 capture_bubble_click = null;
             } else {
                 select_bubble(onbubble);
@@ -829,7 +908,6 @@
                 const dx = move[0] - move00[0];
                 const dy = move[1] - move00[1];
                 const z = zoom;
-                // FIXME this is jumpy for some reason
                 set_pan_zoom(pan0[0] + dx*z, pan0[1] + dy*z);
             }
         });
@@ -860,7 +938,7 @@
         the_context = canvas.getContext('2d');
         set_pan_zoom(canvas.width/2, canvas.height/2, 1);
         // start bubble animations
-        setInterval(function(){ frame(); }, 50);
+        setInterval(function(){ frame(); }, frame_rate);
         if (mode === "_demo_") {
             add_bubble(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
             save_popped = false;
@@ -894,14 +972,25 @@
 /*
  TODO...
 
- stick-to button needs to say 'now click on a bubble'
- stick-to button should say which button it's stuck to (stuck to: ____)
- stick-to needs a graphical representation, like an arrow or bulge or something
- stick-to chases its target - it needs to 'just go there' I think, as if it were being dragged
+ pop bubble - others might be stuck to it
+
+ deletion needs a warning, and needs testing - clicking it a few times will delete random entries
+
+ it has frozen up a couple times and you can't select anything
 
  view popped bubbles as table, delete to trash
    see show_popped()
+
+ energy is leaking into the system, causing bubbles to spin instead of settle down (not enough entropy somewhere)
+
+ option to show off-screen bubbles (thin arrows around the edge of the page, possibly with labels)
+
+ stick-to button needs to say 'now click on a bubble'
+ stick-to button should say which button it's stuck to (stuck to: ____)
+
+ bubbles are still being chased (some were running away)
  better selection graphic, like bouncing arrows, so you can see the proper bg color
+ drag should not select (?)
  hover to see details
 
  ground-down mode, or place a boundary
