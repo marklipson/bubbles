@@ -516,20 +516,30 @@
                 fx -= f0c * a.x/d0;
                 fy -= f0c * a.y/d0;
             }
-            if (Math.abs(fx) < bg_friction)
+            // the 'paper' prevents any force below a certain level
+            // TODO combine fx+fy properly into a vector and use its length - the calculation below is 'square'
+            if (Math.abs(fx) < bg_friction  &&  Math.abs(fy) < bg_friction) {
                 fx = 0;
-            if (Math.abs(fy) < bg_friction)
                 fy = 0;
+            }
             return [fx, fy];
         }
         move(dt, friction) {
             let force = this.forces(dt);
+            if (! isFinite(force[0]) || ! isFinite(force[1])) {
+                console.log("FORCE is " + force[0] + ", " + force[1])
+                force = [0, 0]
+            }
             if (isNaN(force[0]) || isNaN(force[1]))
                 force = [0, 0];
             this.vx += force[0];
             this.vy += force[1];
+            // force is reduced a little
+            //  - this is a bit of a hack to make sure entropy is reasonably close to something physical
+            //  - if we keep adding energy into the system it will explode, or at least wiggle, under certain circumstances
             this.x += this.vx * inertia;
             this.y += this.vy * inertia;
+            // this kind of friction is a bit like moving through a viscous fluid (closer to 0) or a gas (closer to 1)
             this.vx *= friction;
             this.vy *= friction;
             if (this.change_size) {
@@ -545,7 +555,6 @@
                 this.change_size -= amt;
             }
             if (this.popping) {
-                console.log("popping")
                 const expand = 0.3 ** dt;
                 this.r *= expand;
                 this.r2 = this.r ** 2;
@@ -737,7 +746,6 @@
             const h = canvas.height/2;
             let r = Math.exp(Math.log(by)/steps);
             function change(){
-                console.log(r);
                 set_pan_zoom((pan[0] - w)/r + w, (pan[1] - h)/r + h, zoom*r);
                 if (steps > 0) {
                     setTimeout(change, frame_rate);
@@ -885,6 +893,14 @@
             move0 = move1 = null;
             pan0 = [pan[0], pan[1]];
         });
+        canvas.addEventListener("mouseout", function(){
+            // TODO if the mouse leaves it may never return, but it still could keep moving, possibly?
+            clicked = false;
+            if (onbubble) {
+                onbubble.dragging = false;
+                onbubble = null;
+            }
+        });
         canvas.addEventListener("mouseup", function(){
             clicked = false;
             if (onbubble) {
@@ -894,9 +910,11 @@
                     const dx = move1[0] - move0[0];
                     const dy = move1[1] - move0[1];
                     const dt = move1[2] - move0[2];
-                    const w_factor = 2 * onbubble.weight**0.1;
-                    onbubble.vx += 20*dx*w_factor / dt;
-                    onbubble.vy += 20*dy*w_factor / dt;
+                    const w_factor = 40 * onbubble.weight**0.1 / dt;
+                    if (isFinite(dx)  &&  isFinite(dy) && isFinite(w_factor)) {
+                        onbubble.vx += dx * w_factor;
+                        onbubble.vy += dy * w_factor;
+                    }
                 }
             }
             onbubble = null;
@@ -978,10 +996,13 @@
 /*
  TODO...
 
+ dropdown: choose default - copies over default
  deletion needs a warning, and needs testing - clicking it a few times will delete random entries
  view popped bubbles as table, delete to trash
    see show_popped()
  zoom is still off if you back up far enough
+ gets into a mode where you can't select and clicking a bubble causes it to disappear
+ save - include zoom/pan
 
  stick-to force needs to be symmetrical
  pop bubble - others might be stuck to it
@@ -992,6 +1013,7 @@
  more colors, no light gray
  optimize - don't paint off-screen stuff
  pop animation w particle effects
+ options panel - friction, all the physics constants, colors, whatever
 
  option to show off-screen bubbles (thin arrows around the edge of the page, possibly with labels)
 
