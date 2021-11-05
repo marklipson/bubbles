@@ -17,11 +17,12 @@
     let bg_friction = 0.4;
     // minimum bubble size
     let min_bubble_r = 15;
+    let max_bubble_r = 2000;
     // show grid
     let show_grid = true;
     // available colors
     const r_colors = [
-        "black", "gray", "lightgray",
+        "black", "gray",
         "red", "deeppink", "crimson",
         "orange", "darkorange", "goldenrod", "brown",
         "yellow",
@@ -40,6 +41,7 @@
     let sel_color = "rgba(255,255,128,128)";  // "#ffff80";
     let bg_color = "#e0e0e0";
     let grid_color = "#c0c0ff";
+    let space_color = "#80a0c0";
     //
     let frame_rate = 40;
     // all bubbles
@@ -50,18 +52,31 @@
     // start time for previous frame
     let t0 = new Date().getTime();
     //view
+    let world_r = 6000;
     let pan = [0, 0];
     let zoom = 1;
+    var mouse_pos = [0, 0];
     var move00 = null, move0 = null, move1 = null;
     let the_canvas = null;
     let the_context = null;
     let capture_bubble_click = null;
-    let ltd_bubble_index = {};
+    let bubble_index = {};
     function add_bubble(bubble) {
         bubbles.push(bubble);
+        bubble_index[bubble.uuid] = bubble;
+    }
+    function stick_bubbles(source, target) {
+        source.stick_to = target.uuid;
+        target.refs.push(source.uuid);
     }
     function delete_bubble(bubble) {
+        for (let nr=0; nr < bubble.refs; nr++) {
+            let other = bubble_index[bubble.refs[nr]];
+            if (other && other.stick_to === bubble.uuid)
+                other.stick_to = null;
+        }
         const nb = bubbles.indexOf(bubble);
+        delete bubble_index[bubble.uuid];
         return bubbles.splice(nb, 1);
     }
     // load/save
@@ -90,9 +105,9 @@
         }
     }
     function save(name="") {
-        name = name || "default";
+        name = name || title || "default";
         const all = all_saves();
-        const data = JSON.stringify({"bubbles": bubbles, "popped": popped});
+        const data = JSON.stringify({"bubbles": bubbles, "popped": popped, "pan": pan, "zoom": zoom});
         localStorage.setItem("save." + name, data);
         // make sure the save is listed
         if (all.indexOf(name) < 0) {
@@ -100,33 +115,64 @@
             upd_saves(all);
         }
     }
+    function clear() {
+        bubbles = []
+        bubble_index = {}
+    }
     function load(name="") {
         name = name || "default";
+        if (name === title)
+            return;
         title = name;
         const edt_title = document.getElementById("title");
         edt_title.value = name;
-        const data = JSON.parse(localStorage.getItem("save." + name));
+        let data = JSON.parse(localStorage.getItem("save." + name));
         if (data === null)
-            return;
-        bubbles = []
-        for (var nb=0; nb < data.bubbles.length; nb++) {
+            data = {bubbles: [], popped: []};
+        clear();
+        let refs = [];
+        for (let nb=0; nb < data.bubbles.length; nb++) {
             const b = data.bubbles[nb];
             if (b === null || b.x === null)
                 continue;
             const b_new = new Bubble(b.x, b.y, b.r, b.color, b.text, b.fixed, b.weight, b.bounce, b.gravity, b.uuid, b.stick_to);
             add_bubble(b_new);
+            if (b.stick_to)
+                refs.push([b.uuid, b.stick_to]);
+        }
+        for (let nr=0; nr < refs.length; nr++) {
+            const ref = refs[nr]
+            const referenced = bubble_index[ref[1]];
+            if (referenced)
+                referenced.refs.push(ref[0]);
         }
         popped = data.popped;
-    }
-    function clear() {
-        bubbles = []
-        popped = [];
+        if (data.pan && data.zoom)
+            set_pan_zoom(data.pan[0], data.pan[1], data.zoom);
+        // make it bookmarkable
+        window.location.hash = title;
     }
     //
     function set_pan_zoom(px, py, z=0) {
+        const trunc = truncate_to_world(px, py);
+        px = trunc[0];
+        py = trunc[1];
+        const w = the_canvas.width;
+        const h = the_canvas.height;
         pan = [px, py];
         zoom = z || zoom;
-        the_context.setTransform(zoom, 0, 0, zoom, pan[0], pan[1]);
+        const tx = w/2 - zoom*px;
+        const ty = h/2 - zoom*py;
+        the_context.setTransform(zoom, 0, 0, zoom, tx, ty);
+    }
+    //
+    function truncate_to_world(px, py, margin=0) {
+        const d2 = px*px + py*py;
+        const r = world_r - margin;
+        if (d2 < r*r)
+            return [px, py];
+        const f = r / Math.sqrt(d2);
+        return [px * f, py * f];
     }
     /**
      * Click-and-hold adapter for buttons.  Calls first(), then repeatedly calls every() while clicked, then last().
@@ -287,6 +333,7 @@
             this.r2 = r*r;
             this.uuid = uuid || crypto.randomUUID();
             this.stick_to = stick_to;
+            this.refs = [];
             this.color = color;
             this.text = text;
             this.weight = weight;
@@ -335,23 +382,44 @@
                 this.squish[n1] -= f(n * 6.284 / npts);
             }
         }
+        radius(px, py) {
+            let r = this.r;
+            const a = Math.atan2(py - this.y, px - this.x)
+            if (this.squish) {
+                let a_r = a * this.squish.length / 6.284;
+                a_r = Math.floor((a_r + this.squish.length) % this.squish.length);
+                r = this.squish[a_r];
+            }
+            return r;
+        }
         draw(ctx) {
             const r = this.r - bubble_outer_margin;
             // indicator of bubble selection
-            if ((capture_bubble_click  &&  capture_bubble_click.source === this) || (this.selected && this.stick_to)) {
-                ctx.strokeStyle = "red";
+            if ((capture_bubble_click  &&  capture_bubble_click.source === this) || (bubble_index[this.stick_to])) {
                 ctx.lineWidth = 2;
                 ctx.beginPath();
-                ctx.moveTo(this.x, this.y);
+                let x0 = this.x, y0 = this.y;
+                let x1 = 0, y1 = 0;
                 if (capture_bubble_click) {
-                    const tx = move1[0] - move00[0];
-                    const ty = move1[1] - move00[1];
-                    ctx.lineTo(this.x + tx, this.y + ty);
-                } else if (ltd_bubble_index[this.stick_to]) {
-                    const tx = ltd_bubble_index[this.stick_to].x;
-                    const ty = ltd_bubble_index[this.stick_to].y;
-                    ctx.lineTo(tx, ty);
+                    x1 = this.x + move1[0] - move00[0];
+                    y1 = this.y + move1[1] - move00[1];
+                    ctx.strokeStyle = "red";
+                } else if (bubble_index[this.stick_to]) {
+                    const other = bubble_index[this.stick_to];
+                    x1 = other.x;
+                    y1 = other.y;
+                    // move (x1, y1) to the edge of the other bubble
+                    let r_d = other.radius(x0, y0) / Math.sqrt((x1-x0)**2 + (y1-y0)**2);
+                    x1 -= (x1-x0)*r_d;
+                    y1 -= (y1-y0)*r_d;
+                    ctx.strokeStyle = "darkgray";
                 }
+                // move (x0, y0) to the edge of this bubble
+                let r_d = this.radius(x1, y1) / Math.sqrt((x1-x0)**2 + (y1-y0)**2);
+                x0 += (x1-x0)*r_d;
+                y0 += (y1-y0)*r_d;
+                ctx.moveTo(x0, y0);
+                ctx.lineTo(x1, y1);
                 ctx.stroke();
             }
             // trace outline of bubble
@@ -410,17 +478,12 @@
                 ctx.setLineDash([])
             }
             // pointer toward stuck-to bubble
-            if (this.stick_to  &&  ltd_bubble_index[this.stick_to]) {
-                const dx = ltd_bubble_index[this.stick_to].x - this.x;
-                const dy = ltd_bubble_index[this.stick_to].y - this.y;
-                const color = ltd_bubble_index[this.stick_to].color;
-                let r = this.r;
-                const a = Math.atan2(dy, dx)
-                if (this.squish) {
-                    let a_r = a * this.squish.length / 6.284;
-                    a_r = Math.floor((a_r + this.squish.length) % this.squish.length);
-                    r = this.squish[a_r];
-                }
+            if (this.stick_to  &&  bubble_index[this.stick_to]) {
+                const color = bubble_index[this.stick_to].color;
+                const to_x = bubble_index[this.stick_to].x;
+                const to_y = bubble_index[this.stick_to].y;
+                let r = this.radius(to_x, to_y);
+                let a = Math.atan2(to_y - this.y, to_x - this.x);
                 const px = this.x + r * Math.cos(a);
                 const py = this.y + r * Math.sin(a);
                 ctx.beginPath();
@@ -462,7 +525,6 @@
             this.restore_surface();
             if (this.popping)
                 return [0, 0];
-            ltd_bubble_index = {};
             for (var nb=0; nb < bubbles.length; nb++){
                 const b = bubbles[nb];
                 if (a === b  ||  b.popping)
@@ -487,9 +549,8 @@
                 }
                 // stuck to another bubble - follow closely
                 if (b.uuid === this.stick_to) {
-                    ltd_bubble_index[b.uuid] = b;
                     if (closeness > 200)
-                        f_a = -((closeness - 200)/200) * dt;
+                        f_a = -((closeness - 200)/200) * 2 * dt;
                 }
                 // gravity toward other bubble
                 else if (b.gravity) {
@@ -501,7 +562,8 @@
                     else
                         f_a += -grav * 5 * dt * 0.5**((d-b.r)/500) * Math.sqrt(this.weight);
                 }
-                if (f_a) {
+                // give the force (f_a) a direction
+                if (f_a && d) {
                     fx -= f_a * dx/d;
                     fy -= f_a * dy/d;
                 }
@@ -539,6 +601,9 @@
             //  - if we keep adding energy into the system it will explode, or at least wiggle, under certain circumstances
             this.x += this.vx * inertia;
             this.y += this.vy * inertia;
+            const trunc = truncate_to_world(this.x, this.y, this.r + 10);
+            this.x = trunc[0];
+            this.y = trunc[1];
             // this kind of friction is a bit like moving through a viscous fluid (closer to 0) or a gas (closer to 1)
             this.vx *= friction;
             this.vy *= friction;
@@ -551,6 +616,8 @@
                 this.r += amt;
                 if (this.r < min_bubble_r)
                     this.r = min_bubble_r;
+                if (this.r > max_bubble_r)
+                    this.r = max_bubble_r;
                 this.r2 = this.r ** 2;
                 this.change_size -= amt;
             }
@@ -570,11 +637,11 @@
     }
     function draw_grid() {
         const ctx = the_context;
-        let x0 = -pan[0]/zoom;
-        let y0 = -pan[1]/zoom;
-        const grid_size = 100;
         const w = the_canvas.width / zoom;
         const h = the_canvas.height / zoom;
+        let x0 = pan[0] - w/2;
+        let y0 = pan[1] - h/2;
+        const grid_size = 100;
         const n_x = Math.floor(w / grid_size) + 1;
         const n_y = Math.floor(h / grid_size) + 1;
         const gx0 = x0 - x0 % grid_size;
@@ -584,18 +651,35 @@
             ctx.fillRect(x0, gy0 + ny*grid_size, w, 1);
         for (let nx=0; nx < n_x; nx++)
             ctx.fillRect(gx0 + nx*grid_size, y0, 1, h);
+        // DEBUG
+        ctx.fillStyle = "darkgray";
+        ctx.fillRect(-100, -1, 200, 3);
+        ctx.fillRect(-1, -100, 3, 200);
+        //ctx.fillText("PAN=" + pan[0] + ", " + pan[1], pan[0], pan[1])
     }
     function frame() {
         const ctx = the_context;
         const z = zoom;
         //ctx.clearRect(-the_canvas.width/2, -the_canvas.height/2, the_canvas.width, the_canvas.height)
+        const sw = the_canvas.width;
+        const sh = the_canvas.height;
+        // fill visible black
+        ctx.fillStyle = space_color;
+        ctx.fillRect(pan[0] - sw/2/z, pan[1] - sh/2/z, sw/z, sh/z)
+        // draw world color and grid inside the giant circle
+        ctx.save()
+        ctx.beginPath();
+        ctx.ellipse(0, 0, world_r, world_r, 0, 0, 6.28319);
+        ctx.clip();
         ctx.fillStyle = bg_color;
-        ctx.fillRect(-pan[0]/z, -pan[1]/z, the_canvas.width/z, the_canvas.height/z)
+        ctx.fillRect(pan[0] - sw/2/z, pan[1] - sh/2/z, sw/z, sh/z)
+        if (show_grid)
+            draw_grid();
+        ctx.restore();
+        //
         const t = new Date().getTime();
         const dt = Math.min(t - t0, 0.1);
         const friction = v_friction**dt;
-        if (show_grid)
-            draw_grid();
         t0 = t;
         for (var nb=0; nb < bubbles.length; nb++){
             bubbles[nb].move(dt, friction);
@@ -609,14 +693,10 @@
             const b = bubbles[nb];
             const d2 = (x-b.x)*(x-b.x)+(y-b.y)*(y-b.y);
             if (d2 < b.r2) {
-                if (b.squish) {
-                    let clk_a = Math.atan2(y - b.y, x - b.x) * b.squish.length / 6.284;
-                    clk_a = Math.floor((clk_a + b.squish.length) % b.squish.length);
-                    const clk_r = b.squish[clk_a];
-                    if (d2 < clk_r*clk_r  &&  (! best || d2 < d_best)) {
-                        best = b;
-                        d_best = d2;
-                    }
+                const clk_r = b.radius(x, y)
+                if (d2 < clk_r*clk_r  &&  (! best || d2 < d_best)) {
+                    best = b;
+                    d_best = d2;
                 }
             }
         }
@@ -706,7 +786,7 @@
                         source: bubble,
                         selected: function(to_bubble) {
                             if (to_bubble) {
-                                bubble.stick_to = to_bubble.uuid;
+                                stick_bubbles(bubble, to_bubble);
                             }
                         }
                     }
@@ -738,15 +818,13 @@
         var panel = document.getElementById("panel");
         // set up tools
         function change_zoom(by, steps) {
-            if (zoom < 0.1 && by < 1)
+            if (zoom < 0.125 && by < 1)
                 return;
-            if (zoom > 10 &&  by > 1)
+            if (zoom > 8 &&  by > 1)
                 return;
-            const w = canvas.width/2;
-            const h = canvas.height/2;
             let r = Math.exp(Math.log(by)/steps);
             function change(){
-                set_pan_zoom((pan[0] - w)/r + w, (pan[1] - h)/r + h, zoom*r);
+                set_pan_zoom(pan[0], pan[1], zoom*r);
                 if (steps > 0) {
                     setTimeout(change, frame_rate);
                     steps -= 1;
@@ -754,12 +832,8 @@
             }
             change();
         }
-        document.getElementById("zoom-in").addEventListener("click", function(){
-            change_zoom(1.25, 12)
-        });
-        document.getElementById("zoom-out").addEventListener("click", function(){
-            change_zoom(1/1.25, 12);
-        });
+        button_repeater(document.getElementById("zoom-in"), function() { change_zoom(1.25, 6)}, 240)
+        button_repeater(document.getElementById("zoom-out"), function() { change_zoom(1/1.25, 6)}, 240)
         const edt_title = document.getElementById("title");
         const save_sel = document.getElementById("saves");
         function title_change() {
@@ -785,7 +859,7 @@
             saves.push(edited);
             upd_saves(saves);
             // save right away
-            save(title);
+            save();
             // select in drop-down
             save_sel.value = title;
             // bookmarkable
@@ -801,43 +875,44 @@
         // detect hash change from browser back/fwd buttons
         window.addEventListener("hashchange", function(){
             save();
-            clear();
-            setup();
+            let mode = window.location.hash;
+            if (mode.startsWith("#"))
+                mode = mode.substring(1);
+            mode = decodeURI(mode);
+            load(mode);
         });
         // switch
         save_sel.addEventListener("change", function(){
             if (save_sel.value === "")
                 return;
-            save(title);
+            save();
             load(save_sel.value);
-            // bookmarkable
-            window.location.hash = title;
         });
         // 'new'
         const btn_new = document.getElementById("new-file");
         btn_new.addEventListener("click", function(){
             // save current data
-            save(title);
+            save();
             const new_title = prompt("Name for new thing: ");
             if (new_title === "")
                 return;
             clear();
+            set_pan_zoom(0, 0, 1);
             title = new_title;
-            save(title);
+            save(tite);
             load(title);
-            // bookmarkable
-            window.location.hash = title;
         });
         // 'delete'
         const btn_del = document.getElementById("delete-file");
         btn_del.addEventListener("click", function(){
+            if (! confirm("Are you sure you want to delete the bubble world '" + title + "'?  Click CANCEL to keep it."))
+                return;
             clear();
             let saves = all_saves();
             saves.splice(saves.indexOf(title), 1);
             upd_saves(saves);
             // return to default
             load();
-            window.location.hash = title;
         });
         // 'grid'
         const btn_grid = document.getElementById("show-grid");
@@ -846,7 +921,9 @@
         });
         //
         function to_ctx_coords(evt) {
-            return [(evt.offsetX - pan[0])/zoom, (evt.offsetY - pan[1])/zoom];
+            const w = the_canvas.width;
+            const h = the_canvas.height;
+            return [(evt.offsetX - w/2)/zoom + pan[0], (evt.offsetY - h/2)/zoom + pan[1]];
         }
         function select_bubble(bubble) {
             const select = bubble && ! bubble.selected;
@@ -921,6 +998,7 @@
         });
         canvas.addEventListener("mousemove", function(evt){
             const pos = to_ctx_coords(evt);
+            mouse_pos = pos
             const move = [evt.x, evt.y, new Date().getTime()]
             move0 = move1;
             move1 = move;
@@ -932,7 +1010,7 @@
                 // pan
                 const dx = move[0] - move00[0];
                 const dy = move[1] - move00[1];
-                set_pan_zoom(pan0[0] + dx, pan0[1] + dy);
+                set_pan_zoom(pan0[0] - dx/zoom, pan0[1] - dy/zoom);
             }
         });
     }
@@ -956,13 +1034,16 @@
             mode = mode.substring(1);
         mode = decodeURI(mode);
         const canvas = document.getElementById("view");
+        // FIXME update this on resize!
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
         the_canvas = canvas;
         the_context = canvas.getContext('2d');
-        set_pan_zoom(canvas.width/2, canvas.height/2, 1);
+        set_pan_zoom(pan[0], pan[1], zoom);
         // start bubble animations
         setInterval(function(){ frame(); }, frame_rate);
+        // make bubbles draggable
+        drag_and_select();
         if (mode === "_demo_") {
             add_bubble(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
             save_popped = false;
@@ -982,12 +1063,10 @@
             save_popped = true;
             load(mode);
             // auto-save
-            setInterval(function(){save(title);}, 5000);
+            setInterval(function(){save();}, 5000);
             // introductory bubble
             if (! bubbles.length)
                 add_bubble(new Bubble(0, 0, 140, 'blue', 'double click to add a bubble\nclick to change or drag', true, 1, 1, 5));
-            // make bubbles draggable
-            drag_and_select();
         }
     }
     window.addEventListener("load", setup);
@@ -996,30 +1075,20 @@
 /*
  TODO...
 
- dropdown: choose default - copies over default
- deletion needs a warning, and needs testing - clicking it a few times will delete random entries
  view popped bubbles as table, delete to trash
    see show_popped()
- zoom is still off if you back up far enough
- gets into a mode where you can't select and clicking a bubble causes it to disappear
- save - include zoom/pan
-
  stick-to force needs to be symmetrical
- pop bubble - others might be stuck to it
- save/load options
+ more colors (fill to side of textarea)
+ pop animation w particle effects
+
  it has frozen up a couple times and you can't select anything
  energy is leaking into the system, causing bubbles to spin instead of settle down (not enough entropy somewhere)
+ options panel - friction, all the physics constants, colors, whatever, save them
  gravity and weight could be combined
- more colors, no light gray
  optimize - don't paint off-screen stuff
- pop animation w particle effects
- options panel - friction, all the physics constants, colors, whatever
-
  option to show off-screen bubbles (thin arrows around the edge of the page, possibly with labels)
-
  stick-to button needs to say 'now click on a bubble'
- stick-to button should say which button it's stuck to (stuck to: ____)
- surface tension
+ surface tension adjustment
 
  bubbles are still being chased (some were running away)
  better selection graphic, like bouncing arrows, so you can see the proper bg color
