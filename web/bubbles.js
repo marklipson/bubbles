@@ -154,6 +154,12 @@
         window.location.hash = title;
     }
     //
+    function make_uuid() {
+        if (typeof(crypto) != "undefined"  &&  typeof(crypto.randomUUID) != "undefined")
+            return crypto.randomUUID();
+        return Math.floor(Math.random()*2000000000).toString(36);
+    }
+    //
     function set_pan_zoom(px, py, z=0) {
         const trunc = truncate_to_world(px, py);
         px = trunc[0];
@@ -332,7 +338,7 @@
                 r = min_bubble_r;
             this.r = r;
             this.r2 = r*r;
-            this.uuid = uuid || crypto.randomUUID();
+            this.uuid = uuid || make_uuid();
             this.stick_to = stick_to;
             this.refs = [];
             this.color = color;
