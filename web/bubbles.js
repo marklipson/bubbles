@@ -23,18 +23,18 @@
     // available colors
     const r_colors = [
         "black", "gray",
-        "red", "deeppink", "crimson",
+        "red", "crimson", "deeppink", "maroon",
         "orange", "darkorange", "goldenrod", "brown",
-        "yellow",
+        "yellow", "gold",
         "greenyellow",
-        "green",
+        "green", "limegreen",
         "darkolivegreen", "darkseagreen",
         "darkturquoise",
         "darkcyan",
         "aqua",
-        "blue",
-        "darkslateblue",
-        "purple"
+        "blue", "cornflowerblue",
+        "royalblue", "darkslateblue", "slateblue",
+        "purple", "darkviolet"
     ];
     /////////
     // colors
@@ -248,6 +248,7 @@
         })
         set_v(getter());
         const btn_up = document.createElement("button");
+        btn_up.setAttribute("title", "Increase " + name);
         btn_up.innerText = "+"
         btn_up.addEventListener("click", function() {
             if (vmin <= 0)
@@ -256,6 +257,7 @@
                 set_v(getter() * 1.2);
         });
         const btn_down = document.createElement("button");
+        btn_down.setAttribute("title", "Decrease " + name);
         btn_down.innerText = "-"
         btn_down.addEventListener("click", function() {
             if (vmin <= 0)
@@ -828,6 +830,7 @@
             area.appendChild(btn_bigger);
             // - puff
             const btn_puff = document.createElement("button");
+            btn_puff.setAttribute("title", "Pump up with extra air while clicking, then release when unclicked.");
             btn_puff.innerText = "puff"
             var save_r = null;
             button_hold_events(btn_puff,
@@ -835,6 +838,8 @@
                     save_r = bubble.r;
                 }, function(d){
                     bubble.r *= 1.025;
+                    if (bubble.r > max_bubble_r)
+                        bubble.r = max_bubble_r;
                     bubble.r2 = bubble.r ** 2;
                 }, function(d){
                     function down(){
@@ -858,6 +863,7 @@
             area.appendChild(document.createElement("br"));
             // pinned
             const btn_pinned = document.createElement("button");
+            btn_pinned.setAttribute("title", "When a bubble is 'pinned' it cannot be moved by other bubbles.");
             btn_pinned.innerText = bubble.fixed ? "PINNED" : "   pin   ";
             btn_pinned.addEventListener("click", function() {
                 bubble.fixed = ! bubble.fixed;
@@ -866,6 +872,7 @@
             area.appendChild(btn_pinned);
             // stick-to
             const btn_stick = document.createElement("button");
+            btn_stick.setAttribute("title", "Attaches a stretchy line to another bubble.");
             btn_stick.innerText = bubble.stick_to ? "unstick" : "stick-to";
             btn_stick.addEventListener("click", function() {
                 if (bubble.stick_to)
@@ -887,6 +894,7 @@
             area.appendChild(btn_stick);
             // pop bubble
             const btn_pop = document.createElement("button");
+            btn_pop.setAttribute("title", "Pop a bubble.  Goodbye, bubble.");
             btn_pop.innerText = "pop"
             btn_pop.addEventListener("click", function() {
                 pop_bubble(bubble);
@@ -1103,6 +1111,11 @@
                 set_pan_zoom(pan0[0] - dx/zoom, pan0[1] - dy/zoom);
             }
         });
+        // TODO I saw something on fredmeyer.com using two-finger scroll so it must be possible
+        //   - but this isn't working
+        //canvas.addEventListener("touchmove", function(evt) {
+        //    console.log(evt);
+        //});
     }
     function show_popped() {
         const area = document.getElementById("data-frame");

@@ -31,7 +31,7 @@
         }
         #panel textarea {
             height: 55px;
-            width: 400px;
+            width: calc(16px * 27);
         }
         #toolbar {
             top: 0;
@@ -58,13 +58,13 @@
     <canvas id="view" width="1000" height="1000">
     </canvas>
     <div id="toolbar">
-        <input id="title"/>
-        <select id="saves"></select><br/>
-        <button id="new-file">new</button><br/>
-        <button id="delete-file">del</button><br/>
-        <button id="show-grid">grid</button><br/>
-        <button id="zoom-in" class="btn-zoom">+</button><br/>
-        <button id="zoom-out" class="btn-zoom">-</button><br/>
+        <input id="title" title="Rename this page."/>
+        <select id="saves" title="Switch to a different page of bubbles."></select><br/>
+        <button id="new-file" title="Create a new page for bubbles.">new</button><br/>
+        <button id="delete-file" title="Delete this whole page.">del</button><br/>
+        <button id="show-grid" title="Turn the graph/grid lines on and off.">grid</button><br/>
+        <button id="zoom-in" class="btn-zoom" title="Look closer.">+</button><br/>
+        <button id="zoom-out" class="btn-zoom" title="Back up and look from further away.">-</button><br/>
     </div>
     <div id="panel"></div>
     <div id="data-frame">
