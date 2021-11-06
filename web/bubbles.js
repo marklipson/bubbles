@@ -61,6 +61,7 @@
     let the_context = null;
     let capture_bubble_click = null;
     let bubble_index = {};
+    let animators = [];
     function add_bubble(bubble) {
         bubbles.push(bubble);
         bubble_index[bubble.uuid] = bubble;
@@ -392,6 +393,15 @@
             }
             return r;
         }
+        polar(a, r) {
+            return [
+                this.x + Math.cos(a) * r,
+                this.y + Math.sin(a) * r
+            ];
+        }
+        wall_width() {
+            return bubble_wall * Math.max(0.1, Math.log(4*this.weight));
+        }
         draw(ctx) {
             const r = this.r - bubble_outer_margin;
             // indicator of bubble selection
@@ -445,26 +455,15 @@
                 ctx.ellipse(this.x, this.y, r - bubble_wall, r - bubble_wall, 0, 0, 6.284);
                 ctx.closePath();
             }
-            if (this.popping) {
-                // no fill while popping
-            }
-            else if (this.selected) {
-                // selected fill
-                ctx.fillStyle = sel_color;
-                ctx.globalAlpha = 0.7;
-                ctx.fill()
-                ctx.globalAlpha = 1;
-            }
-            else {
-                // normal fill
+            // normal fill
+            if (! this.popping) {
                 ctx.fillStyle = this.color;
                 ctx.globalAlpha = 0.3;
                 ctx.fill()
                 ctx.globalAlpha = 1;
             }
             // draw border
-            const w_h = bubble_wall * Math.max(0.1, Math.log(4*this.weight));
-            ctx.lineWidth = w_h;
+            ctx.lineWidth = this.wall_width();
             if (this.popping)
                 ctx.lineWidth = 1;
             ctx.strokeStyle = this.color;
@@ -476,6 +475,45 @@
                 ctx.setLineDash([4, 10])
                 ctx.stroke();
                 ctx.setLineDash([])
+            }
+            if (this.selected && ! this.popping) {
+                // show selection
+                const dt = new Date();
+                const t = (dt.getUTCSeconds() * 1000 + dt.getUTCMilliseconds()) / 1000;
+                const xr = Math.sin((t % 2.0)/(2.0/6.283)) * 5;
+                const spin = (t % 1000000)/10;
+                ctx.fillStyle = sel_color;
+                ctx.globalAlpha = 0.5;
+                ctx.beginPath();
+                ctx.lineWidth = 10/zoom;
+                ctx.strokeStyle = sel_color;
+                ctx.arc(this.x, this.y, (50 + xr)/zoom, 0, 6.283);
+                ctx.stroke()
+                ctx.globalAlpha = 1;
+                /*
+                // crosshairs
+                ctx.beginPath();
+                ctx.strokeStyle = "red";
+                ctx.lineWidth = 4 / zoom;
+                for (let a=0; a < 6.283; a += 1.5707) {
+                    ctx.beginPath();
+                    let p1 = this.polar(a, (25 + xr)/zoom);
+                    let p2 = this.polar(a, (50 + xr)/zoom);
+                    ctx.moveTo(p1[0], p1[1]);
+                    ctx.lineTo(p2[0], p2[1]);
+                    ctx.stroke();
+                }
+                */
+                ctx.strokeStyle = "gray";
+                ctx.lineWidth = 1 / zoom;
+                for (let a=0; a < 6.283; a += 0.15707) {
+                    ctx.beginPath();
+                    let p1 = this.polar(a+spin, (60)/zoom);
+                    let p2 = this.polar(a+spin, (67)/zoom);
+                    ctx.moveTo(p1[0], p1[1]);
+                    ctx.lineTo(p2[0], p2[1]);
+                    ctx.stroke();
+                }
             }
             // pointer toward stuck-to bubble
             if (this.stick_to  &&  bubble_index[this.stick_to]) {
@@ -626,12 +664,6 @@
                 this.r *= expand;
                 this.r2 = this.r ** 2;
                 this.popping *= expand;
-                if (this.popping < 0.1) {
-                    const bbl = delete_bubble(this);
-                    bbl.popped_at = new Date().getTime();
-                    if (save_popped)
-                        popped.push(bbl);
-                }
             }
         }
     }
@@ -657,6 +689,48 @@
         ctx.fillRect(-1, -100, 3, 200);
         //ctx.fillText("PAN=" + pan[0] + ", " + pan[1], pan[0], pan[1])
     }
+    function pop_bubble(bubble) {
+        const ctx = the_context;
+        let parts = [];
+        const squishlen = bubble.squish.length;
+        const avglen = 6.283 * bubble.r * 5 / squishlen;
+        bubble.popped_at = new Date().getTime();
+        bubble.popping = 1;
+        if (save_popped)
+            popped.push(bubble);
+        for (let nr=0; nr < squishlen; nr+=5) {
+            const a = nr*6.283/squishlen;
+            const c = bubble.polar(a, bubble.squish[nr]);
+            parts.push({x: c[0], y: c[1], a: a + 1.57, vx: 12*Math.cos(a) + 5*Math.random(), vy: 12*Math.sin(a) + 5*Math.random(), da: Math.random()-0.5, len: avglen + Math.random()*avglen*0.7})
+        }
+        let n_frames = 20;
+        let frame = 0;
+        function pop_frame(dt) {
+            ctx.beginPath();
+            ctx.lineWidth = bubble.wall_width();
+            ctx.strokeStyle = bubble.color;
+            for (let np=0; np < parts.length; np++) {
+                const part = parts[np];
+                const dx = Math.cos(part.a) * part.len;
+                const dy = Math.sin(part.a) * part.len;
+                ctx.moveTo(part.x+dx, part.y+dy);
+                ctx.lineTo(part.x-dy, part.y-dy);
+                part.x += part.vx;
+                part.y += part.vy;
+                part.a += part.da;
+            }
+            ctx.globalAlpha = ((n_frames-frame)/n_frames);
+            ctx.stroke();
+            ctx.globalAlpha = 1
+            frame ++;
+            if (frame >= n_frames) {
+                delete_bubble(bubble);
+                return true;
+            }
+            return false;
+        }
+        animators.push(pop_frame);
+    }
     function frame() {
         const ctx = the_context;
         const z = zoom;
@@ -676,7 +750,7 @@
         if (show_grid)
             draw_grid();
         ctx.restore();
-        //
+        // move & draw bubbles
         const t = new Date().getTime();
         const dt = Math.min(t - t0, 0.1);
         const friction = v_friction**dt;
@@ -684,6 +758,17 @@
         for (var nb=0; nb < bubbles.length; nb++){
             bubbles[nb].move(dt, friction);
             bubbles[nb].draw(ctx);
+        }
+        // additional animations
+        let remove_anims = [];
+        for (let na=0; na < animators.length; na++) {
+            let anim = animators[na];
+            // call each animator - they return true when they are done
+            if (anim(dt))
+                remove_anims.push(anim)
+        }
+        for (na=0; na < remove_anims.length; na++) {
+            animators.splice(animators.indexOf(remove_anims[na]), 1);
         }
     }
     function overbubble(x, y) {
@@ -798,8 +883,7 @@
             const btn_pop = document.createElement("button");
             btn_pop.innerText = "pop"
             btn_pop.addEventListener("click", function() {
-                bubble.popping = 1;
-                bubble.restore_surface();
+                pop_bubble(bubble);
             });
             area.appendChild(btn_pop);
             //
@@ -1054,7 +1138,7 @@
                     add_random_bubble();
                 if (Math.random() < 0.1 && bubbles.length > 10) {
                     nb = Math.floor(Math.random()*(bubbles.length - 1)) + 1;
-                    bubbles[nb].popping = 1;
+                    pop_bubble(bubbles[nb]);
                 }
             }
             setInterval(updates, 150);
@@ -1077,9 +1161,9 @@
 
  view popped bubbles as table, delete to trash
    see show_popped()
- stick-to force needs to be symmetrical
  more colors (fill to side of textarea)
- pop animation w particle effects
+ drag should not select (?)
+ stick-to force needs to be symmetrical
 
  it has frozen up a couple times and you can't select anything
  energy is leaking into the system, causing bubbles to spin instead of settle down (not enough entropy somewhere)
@@ -1091,16 +1175,12 @@
  surface tension adjustment
 
  bubbles are still being chased (some were running away)
- better selection graphic, like bouncing arrows, so you can see the proper bg color
- drag should not select (?)
  hover to see details
+ wrap text to bubble?
 
- ground-down mode, or place a boundary
  JIRA link per bubble
- coordinates
 
  instructions
    double click to create new bubble
    link to demo mode
-
  */
