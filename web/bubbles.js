@@ -18,6 +18,9 @@
     // minimum bubble size
     let min_bubble_r = 15;
     let max_bubble_r = 2000;
+    // zoom range
+    let min_zoom = 0.08;
+    let max_zoom = 9;
     // show grid
     let show_grid = true;
     // available colors
@@ -413,16 +416,17 @@
         draw(ctx) {
             const r = this.r - bubble_outer_margin;
             // indicator of bubble selection
-            if ((capture_bubble_click  &&  capture_bubble_click.source === this) || (bubble_index[this.stick_to])) {
+            const is_click_source = capture_bubble_click  &&  capture_bubble_click.source === this;
+            if (is_click_source || bubble_index[this.stick_to]) {
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 let x0 = this.x, y0 = this.y;
                 let x1 = 0, y1 = 0;
-                if (capture_bubble_click) {
+                if (is_click_source) {
                     x1 = this.x + move1[0] - move00[0];
                     y1 = this.y + move1[1] - move00[1];
                     ctx.strokeStyle = "red";
-                } else if (bubble_index[this.stick_to]) {
+                } else {
                     const other = bubble_index[this.stick_to];
                     x1 = other.x;
                     y1 = other.y;
@@ -698,13 +702,17 @@
         //ctx.fillText("PAN=" + pan[0] + ", " + pan[1], pan[0], pan[1])
     }
     function pop_bubble(bubble) {
+        if (bubble.popping  ||  bubble.popped_at)
+            return;
+        if (bubble.selected);
+            select_bubble(null);
         const ctx = the_context;
         let parts = [];
         const squishlen = bubble.squish.length;
         const avglen = 6.283 * bubble.r * 5 / squishlen;
         bubble.popped_at = new Date().getTime();
         bubble.popping = 1;
-        if (save_popped)
+        if (save_popped  &&  bubble.text)
             popped.push(bubble);
         for (let nr=0; nr < squishlen; nr+=5) {
             const a = nr*6.283/squishlen;
@@ -804,6 +812,7 @@
             area.innerHTML = h;
             // edit title
             const edit_text = document.createElement("textarea");
+            edit_text.id = "bubble_text_editor";
             edit_text.setAttribute("rows", "3");
             edit_text.value = bubble.text;
             edit_text.addEventListener("input", function() {
@@ -907,6 +916,123 @@
         }
         refresh();
     }
+
+    /**
+     * Open or close the pop-up modal dialog and return its area for writing.
+     */
+    function show_dialog(enable=true) {
+        const dlg_frame = document.getElementById("dialog-frame");
+        const dlg_body = document.getElementById("dialog-body");
+        const dlg_closer = document.getElementById("dialog-close");
+        dlg_frame.style.display = dlg_body.style.display = "block";
+        function closer() {
+            dlg_frame.style.display = dlg_body.style.display = "none";
+            dlg_closer.removeEventListener("click", closer);
+            dlg_body.innerText = "";
+        }
+        dlg_closer.addEventListener("click", closer);
+        // TODO Esc to close
+        return dlg_body;
+    }
+
+    /**
+     * Show popped bubbles.
+     */
+    function show_popped_bubbles() {
+        const area = show_dialog();
+        const bubble_list = popped.slice();
+        const table = document.createElement("table");
+        area.appendChild(table);
+        const hdrs = document.createElement("tr");
+        hdrs.style.position = "sticky";
+        hdrs.style.top = "0";
+        table.appendChild(hdrs);
+        const cols = ["", "text", "r", "created_at", "popped_at"];
+        function link_action(add_to, text, action, tooltip) {
+            const link = document.createElement("div");
+            link.className = "small-link";
+            link.setAttribute("title", tooltip);
+            link.innerText = text;
+            link.addEventListener("click", action);
+            add_to.appendChild(link);
+        }
+        function visit_bubble_checkboxes(visitor) {
+            for (let n=0; n < bubble_list.length; n++) {
+                let cb = document.getElementById("sel-" + n);
+                if (cb)
+                    visitor(cb, bubble_list[n]);
+            }
+        }
+        function remove_bubble_row(cb, bubble) {
+            let idx = popped.indexOf(bubble);
+            if (idx >= 0)
+                popped.splice(idx, 1);
+            let row = cb.parentElement.parentElement;
+            row.parentElement.removeChild(row);
+        }
+        for (let n=0; n < cols.length; n++) {
+            let cell = document.createElement("th");
+            cell.innerText = cols[n];
+            if (cols[n] === "") {
+                link_action(cell, "all",function(){
+                    visit_bubble_checkboxes(function(cb, bubble) {
+                        cb.checked = true;
+                    });
+                }, "Select all bubbles in this list.");
+                link_action(cell, "none",function(){
+                    visit_bubble_checkboxes(function(cb, bubble) {
+                        cb.checked = false;
+                    });
+                }, "Un-select all bubbles in this list.");
+                link_action(cell, "delete",function(){
+                    visit_bubble_checkboxes(function(cb, bubble) {
+                        if (! cb.checked)
+                            return;
+                        remove_bubble_row(cb, bubble);
+                    });
+                }, "Permanently delete checked bubbles.");
+                link_action(cell, "undelete",function(){
+                    visit_bubble_checkboxes(function(cb, bubble) {
+                        if (! cb.checked)
+                            return;
+                        let bbl = new Bubble(bubble.x, bubble.y, bubble.r, bubble.color, bubble.text, bubble.fixed, bubble.weight, bubble.bounce, bubble.gravity, bubble.uuid, bubble.stick_to);
+                        bbl.created_at = bubble.created_at;
+                        add_bubble(bbl);
+                        remove_bubble_row(cb, bubble);
+                    });
+                }, "Un-delete checked bubbles.");
+            }
+            hdrs.appendChild(cell);
+        }
+        for (let n=0; n < bubble_list.length; n++) {
+            const bubble = bubble_list[n];
+            const row = document.createElement("tr");
+            table.appendChild(row);
+            for (let nc=0; nc < cols.length; nc++) {
+                let cell = document.createElement("td");
+                if (cols[nc] === "")
+                    cell.innerHTML = "<input type='checkbox' id='sel-" + n + "'/>";
+                else {
+                    let v = bubble[cols[nc]] || "";
+                    if (cols[nc].endsWith("_at")) {
+                        v = new Date(v);
+                        const mo = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+                        v = mo[v.getMonth()] + " " + v.getDay() + ", " + v.getHours() + ":" + Math.floor(v.getMinutes()/10) + v.getMinutes()%10;
+                    }
+                    if (isFinite(v)) {
+                        v = Math.round(v * 10) / 10;
+                        cell.style.textAlign = "right";
+                    }
+                    cell.innerText = v;
+                }
+                row.appendChild(cell);
+            }
+        }
+    }
+
+    /**
+     * Enable bubble drag, select, pan, zoom, etc..
+     */
     function drag_and_select() {
         const canvas = the_canvas
         var onbubble = null;
@@ -916,10 +1042,10 @@
         var panel = document.getElementById("panel");
         // set up tools
         function change_zoom(by, steps) {
-            if (zoom < 0.125 && by < 1)
-                return;
-            if (zoom > 8 &&  by > 1)
-                return;
+            if (zoom*by < min_zoom && by < 1)
+                by = min_zoom / zoom;
+            if (zoom * by > max_zoom &&  by > 1)
+                by = max_zoom / zoom;
             let r = Math.exp(Math.log(by)/steps);
             function change(){
                 set_pan_zoom(pan[0], pan[1], zoom*r);
@@ -1023,26 +1149,13 @@
             const h = the_canvas.height;
             return [(evt.offsetX - w/2)/zoom + pan[0], (evt.offsetY - h/2)/zoom + pan[1]];
         }
-        function select_bubble(bubble) {
-            const select = bubble && ! bubble.selected;
-            // deselect all bubbles
-            for (var nb=0; nb < bubbles.length; nb++)
-                bubbles[nb].selected = false;
-            if (bubble && select) {
-                // select bubble
-                bubble.selected = true;
-                draw_bubble_form(bubble, panel);
-                panel.style.display = 'block';
-            } else {
-                panel.innerText = "";
-                panel.style.display = 'none';
-            }
-        }
         function create_bubble(at) {
             const c = r_colors[Math.floor(Math.random()*r_colors.length)];
             const bubble = new Bubble(at[0], at[1], 50, c);
             add_bubble(bubble);
             select_bubble(bubble);
+            // focus on text editor
+            document.getElementById("bubble_text_editor").focus();
         }
         canvas.addEventListener("dblclick", function(evt) {
             create_bubble(to_ctx_coords(evt));
@@ -1117,13 +1230,22 @@
         //    console.log(evt);
         //});
     }
-    function show_popped() {
-        const area = document.getElementById("data-frame");
-        // display area
-        // populate the table
-        // button to un-pop or permanently delete
-        // close button
+    function select_bubble(bubble) {
+        const select = bubble && ! bubble.selected;
+        // deselect all bubbles
+        for (var nb=0; nb < bubbles.length; nb++)
+            bubbles[nb].selected = false;
+        if (bubble && select) {
+            // select bubble
+            bubble.selected = true;
+            draw_bubble_form(bubble, panel);
+            panel.style.display = 'block';
+        } else {
+            panel.innerText = "";
+            panel.style.display = 'none';
+        }
     }
+
     function add_random_bubble() {
         var px = Math.random()*900 - 450;
         var py = Math.random()*900 - 450;
@@ -1147,6 +1269,16 @@
         setInterval(function(){ frame(); }, frame_rate);
         // make bubbles draggable
         drag_and_select();
+        // resize
+        window.addEventListener("resize", function(evt) {
+            the_canvas.width = window.innerWidth;
+            the_canvas.height = window.innerHeight;
+            the_context = the_canvas.getContext('2d');
+            set_pan_zoom(pan[0], pan[1], zoom);
+            frame();
+        })
+        // etc
+        document.getElementById("show-popped").addEventListener("click", show_popped_bubbles);
         if (mode === "_demo_") {
             add_bubble(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
             save_popped = false;
@@ -1178,25 +1310,29 @@
 /*
  TODO...
 
- view popped bubbles as table, delete to trash
-   see show_popped()
- more colors (fill to side of textarea)
- drag should not select (?)
- stick-to force needs to be symmetrical
+ adjustable stick-to line length
+ two tabs same page
+   localStorage += tabs={my_random_id: page, ...} - don't allow two tabs to open the same page
+ save/restore to file
 
+ stick-to force should be symmetrical
+ adjustable angular friction for stick-to
+
+ bulk 'rectangle' select - Shift+drag - move/pop/etc a group of bubbles
+ button: undo last pop
+ search for bubble by name
  it has frozen up a couple times and you can't select anything
- energy is leaking into the system, causing bubbles to spin instead of settle down (not enough entropy somewhere)
- options panel - friction, all the physics constants, colors, whatever, save them
  gravity and weight could be combined
+ drag should perhaps not select?
+ options panel - friction, all the physics constants, colors, whatever, save them
+ energy is leaking into the system, causing bubbles to spin instead of settle down (not enough entropy somewhere)
  optimize - don't paint off-screen stuff
  option to show off-screen bubbles (thin arrows around the edge of the page, possibly with labels)
  stick-to button needs to say 'now click on a bubble'
  surface tension adjustment
 
- bubbles are still being chased (some were running away)
  hover to see details
  wrap text to bubble?
-
  JIRA link per bubble
 
  instructions
