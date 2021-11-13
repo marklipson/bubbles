@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Floating Bubbles</title>
+    <title>Bubbles</title>
     <script src="bubbles.js"></script>
     <style>
         body {
@@ -38,9 +38,15 @@
             top: 0;
             left: 0;
             opacity: 0.8;
+            pointer-events: none;
         }
         #toolbar select, button, input {
             margin-bottom: 4px;
+            pointer-events: auto;
+        }
+        #saves {
+            padding: 2px;
+            font-size: 120%;
         }
         .btn-zoom {
             display: inline-block;
@@ -73,6 +79,7 @@
             z-index: 21;
             overflow: auto;
             box-shadow: rgba(0, 0, 0, 0.24) 0px 3px 8px;
+            opacity: 0.75;
         }
         #dialog-close {
             position: fixed;
@@ -110,6 +117,12 @@
         .small-link:hover {
             text-decoration: underline;
         }
+        th.ascending::after {
+            content: " \2b06";
+        }
+        th.descending::after {
+            content: " \2b07";
+        }
     </style>
 </head>
 <body>
@@ -118,9 +131,11 @@
     <div id="toolbar">
         <select id="saves" title="Switch to a different page of bubbles."></select><br/>
         <button id="new-file" title="Create a new page for bubbles.">new</button><br/>
-        <button id="rename-file" title="Rename this page.">new</button><br/>
-        <button id="delete-file" title="Delete this whole page.">del</button><br/>
-        <button id="show-popped" title="See the list of popped bubbles.">popped</button><br/>
+        <button id="rename-file" title="Rename this page.">rename</button><br/>
+        <button id="delete-file" title="Delete this whole page.">delete</button><br/>
+        <button id="download" title="Download this page as a file.">download</button><br/>
+        <button id="show-list" title="Show bubbles in a list.">list...</button><br/>
+        <button id="show-popped" title="See the list of popped bubbles.">popped...</button><br/>
         <button id="show-grid" title="Turn the graph/grid lines on and off.">grid</button><br/>
         <button id="zoom-in" class="btn-zoom" title="Look closer.">+</button><br/>
         <button id="zoom-out" class="btn-zoom" title="Back up and look from further away.">-</button><br/>

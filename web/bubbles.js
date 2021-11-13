@@ -111,10 +111,43 @@
             save_sel.appendChild(opt);
         }
     }
+
+    /**
+     * Convert the current page/scene to JSON.
+     */
+    function _save_data(indent=0) {
+        function reduce(src) {
+            let b = Object.assign({}, src);
+            delete b.squish;
+            delete b.selected;
+            delete b.dragging;
+            b.x = Math.round(b.x*1000) / 1000;
+            b.y = Math.round(b.y*1000) / 1000;
+            b.r = Math.round(b.r*1000) / 1000;
+            delete b.vx;
+            delete b.vy;
+            delete b.r2;
+            delete b.refs;
+            delete b.change_size;
+            delete b.popping;
+            if (! b.stick_to)
+                delete b.stick_to;
+            if (! b.popped_at)
+                delete b.popped_at;
+            return b;
+        }
+        let out = [];
+        for (let n=0; n < bubbles.length; n++)
+            out.push(reduce(bubbles[n]));
+        let out_p = [];
+        for (let n=0; n < popped.length; n++)
+            out_p.push(reduce(popped[n]));
+        return JSON.stringify({"bubbles": out, "popped": out_p, "pan": pan, "zoom": zoom}, null, indent);
+    }
     function save(name="") {
         name = name || title || "default";
         const all = all_saves();
-        const data = JSON.stringify({"bubbles": bubbles, "popped": popped, "pan": pan, "zoom": zoom});
+        const data = _save_data();
         localStorage.setItem("save." + name, data);
         // make sure the save is listed
         if (all.indexOf(name) < 0) {
@@ -130,8 +163,12 @@
         name = name || "default";
         if (name === title)
             return;
-        title = name;
-        let data = JSON.parse(localStorage.getItem("save." + name));
+        let raw_data = localStorage.getItem("save." + name);
+        _load_data(raw_data, name);
+    }
+    function _load_data(raw_data, new_title) {
+        let data = JSON.parse(raw_data);
+        title = new_title;
         if (data === null)
             data = {bubbles: [], popped: []};
         clear();
@@ -141,6 +178,7 @@
             if (b === null || b.x === null)
                 continue;
             const b_new = new Bubble(b.x, b.y, b.r, b.color, b.text, b.fixed, b.weight, b.bounce, b.gravity, b.uuid, b.stick_to);
+            b_new.created_at = b.created_at;
             add_bubble(b_new);
             if (b.stick_to)
                 refs.push([b.uuid, b.stick_to]);
@@ -156,6 +194,14 @@
             set_pan_zoom(data.pan[0], data.pan[1], data.zoom);
         // make it bookmarkable
         window.location.hash = title;
+        document.title = title + " - Bubbles";
+        // show selection
+        const save_sel = document.getElementById("saves");
+        if (all_saves().indexOf(title) === -1) {
+            save();
+            upd_saves();
+        }
+        save_sel.value = title;
     }
     //
     function make_uuid() {
@@ -1066,7 +1112,7 @@
     /**
      * Open or close the pop-up modal dialog and return its area for writing.
      */
-    function show_dialog(enable=true) {
+    function show_dialog() {
         const dlg_frame = document.getElementById("dialog-frame");
         const dlg_body = document.getElementById("dialog-body");
         const dlg_closer = document.getElementById("dialog-close");
@@ -1078,22 +1124,27 @@
         }
         dlg_closer.addEventListener("click", closer);
         // TODO Esc to close
-        return dlg_body;
+        return [dlg_body, closer];
     }
 
     /**
      * Display all popped bubbles in a table.
      */
-    function show_popped_bubbles() {
-        const area = show_dialog();
-        const bubble_list = popped.slice();
+    function show_bubble_list(which="popped") {
+        const area_closer = show_dialog();
+        const area = area_closer[0];
+        const dlg_closer = area_closer[1];
+        const source = (which === "popped") ? popped : bubbles;
+        const bubble_list = source.slice();
         const table = document.createElement("table");
         area.appendChild(table);
         const hdrs = document.createElement("tr");
         hdrs.style.position = "sticky";
         hdrs.style.top = "0";
         table.appendChild(hdrs);
-        const cols = ["", "text", "r", "created_at", "popped_at"];
+        const cols = ["", "text", "r", "created_at"];
+        if (which === "popped")
+            cols.push("popped_at");
         function link_action(add_to, text, action, tooltip) {
             const link = document.createElement("div");
             link.className = "small-link";
@@ -1110,9 +1161,15 @@
             }
         }
         function remove_bubble_row(cb, bubble) {
-            let idx = popped.indexOf(bubble);
-            if (idx >= 0)
-                popped.splice(idx, 1);
+            let idx = source.indexOf(bubble);
+            if (idx >= 0) {
+                if (which === "popped")
+                    // permanent deletion
+                    source.splice(idx, 1);
+                else
+                    // pop
+                    pop_bubble(bubble);
+            }
             let row = cb.parentElement.parentElement;
             row.parentElement.removeChild(row);
         }
@@ -1130,29 +1187,105 @@
                         cb.checked = false;
                     });
                 }, "Un-select all bubbles in this list.");
-                link_action(cell, "delete",function(){
+                link_action(cell, (which === "popped") ? "delete" : "pop",function(){
                     visit_bubble_checkboxes(function(cb, bubble) {
                         if (! cb.checked)
                             return;
                         remove_bubble_row(cb, bubble);
                     });
-                }, "Permanently delete checked bubbles.");
-                link_action(cell, "undelete",function(){
-                    visit_bubble_checkboxes(function(cb, bubble) {
-                        if (! cb.checked)
-                            return;
-                        let bbl = new Bubble(bubble.x, bubble.y, bubble.r, bubble.color, bubble.text, bubble.fixed, bubble.weight, bubble.bounce, bubble.gravity, bubble.uuid, bubble.stick_to);
-                        bbl.created_at = bubble.created_at;
-                        add_bubble(bbl);
-                        remove_bubble_row(cb, bubble);
+                }, (which === "popped") ? "Permanently delete checked bubbles." : "Pop checked bubbles.");
+                if (which === "popped") {
+                    link_action(cell, "undelete", function () {
+                        visit_bubble_checkboxes(function (cb, bubble) {
+                            if (!cb.checked)
+                                return;
+                            let bbl = new Bubble(bubble.x, bubble.y, bubble.r, bubble.color, bubble.text, bubble.fixed, bubble.weight, bubble.bounce, bubble.gravity, bubble.uuid, bubble.stick_to);
+                            bbl.created_at = bubble.created_at;
+                            add_bubble(bbl);
+                            remove_bubble_row(cb, bubble);
+                        });
+                    }, "Un-pop checked bubbles.");
+                } else {
+                    link_action(cell, "go to", function () {
+                        let ul=null, lr=null;
+                        visit_bubble_checkboxes(function (cb, bubble) {
+                            if (!cb.checked)
+                                return;
+                            const b_ul = [bubble.x - bubble.r, bubble.y - bubble.r];
+                            const b_lr = [bubble.x + bubble.r, bubble.y + bubble.r];
+                            if (! ul)
+                                ul = b_ul;
+                            else
+                                ul = [Math.min(ul[0], b_ul[0]), Math.min(ul[1], b_ul[1])]
+                            if (! lr)
+                                lr = b_lr;
+                            else
+                                lr = [Math.max(lr[0], b_lr[0]), Math.max(lr[1], b_lr[1])]
+                        }, "Show checked bubbles.");
+                        if (ul) {
+                            // calculate zoom
+                            let zx = 0.5 * the_canvas.width / (lr[0] - ul[0]);
+                            let zy = 0.5 * the_canvas.height / (lr[1] - ul[1]);
+                            let z = Math.min(zx, zy);
+                            if (z < min_zoom)
+                                z = min_zoom;
+                            if (z > max_zoom)
+                                z = Math.min(max_zoom, 1);
+                            // set pan/zoom to focus on selected bubbles
+                            set_pan_zoom((ul[0] + lr[0])/2, (ul[1] + lr[1])/2, z);
+                            // hide list dialog
+                            dlg_closer();
+                        }
                     });
-                }, "Un-delete checked bubbles.");
+                }
+            } else {
+                // sortable column
+                cell.addEventListener("click", function(evt){
+                    let cell_index = 1;
+                    for (let cell=evt.target; cell.previousElementSibling; cell = cell.previousElementSibling)
+                        cell_index ++;
+                    let rows = [];
+                    table.querySelectorAll("tr.data-row").forEach((tr)=>{rows.push(tr)});
+                    // choose column / toggle direction
+                    let direction = cell.classList.contains("ascending") ? -1 : 1;
+                    table.querySelectorAll("th").forEach((th)=>{
+                        th.classList.remove("ascending");
+                        th.classList.remove("descending");
+                    });
+                    cell.classList.add((direction === 1) ? "ascending" : "descending");
+                    function to_float(v) {
+                        if (! v)
+                            return v;
+                        let vf = parseFloat(v);
+                        return isNaN(vf) ? v : vf;
+                    }
+                    rows.sort(function(a, b){
+                        let v_l = a.querySelector("td:nth-child(" + cell_index + ")").innerText;
+                        let v_r = b.querySelector("td:nth-child(" + cell_index + ")").innerText;
+                        let vn_l = to_float(v_l);
+                        let vn_r = to_float(v_r);
+                        if (typeof(vn_l) != "string"  &&  typeof(vn_r) != "string") {
+                            v_l = vn_l;
+                            v_r = vn_r;
+                        }
+                        if (v_l === v_r)
+                            return 0;
+                        if (v_l < v_r)
+                            return -direction;
+                        return direction;
+                    });
+                    for (let n=0; n < rows.length; n++) {
+                        table.removeChild(rows[n]);
+                        table.appendChild(rows[n]);
+                    }
+                });
             }
             hdrs.appendChild(cell);
         }
         for (let n=0; n < bubble_list.length; n++) {
             const bubble = bubble_list[n];
             const row = document.createElement("tr");
+            row.className = "data-row"
             table.appendChild(row);
             for (let nc=0; nc < cols.length; nc++) {
                 let cell = document.createElement("td");
@@ -1225,6 +1358,7 @@
             save_sel.value = title;
             // bookmarkable
             window.location.hash = title;
+            document.title = title + " - Bubbles";
         }
         const btn_rename = document.getElementById("rename-file");
         btn_rename.addEventListener("click", function(){
@@ -1426,7 +1560,37 @@
             frame();
         })
         // etc
-        document.getElementById("show-popped").addEventListener("click", show_popped_bubbles);
+        document.getElementById("show-list").addEventListener("click", ()=>show_bubble_list("main"));
+        document.getElementById("show-popped").addEventListener("click", ()=>show_bubble_list("popped"));
+        document.getElementById("download").addEventListener("click", function(evt){
+            let data = _save_data(2);
+            let link = document.createElement("a");
+            link.setAttribute("href", "data:application/json;base64," + btoa(data));
+            link.setAttribute("download", title + ".json");
+            link.setAttribute("target", "_blank");
+            link.click();
+        });
+        // FIXME the_canvas changes when window resizes
+        // FIXME this isn't receiving file drops yet
+        the_canvas.addEventListener('dragover', function(e) {
+            e.stopPropagation();
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+        the_canvas.addEventListener("drop", function(evt) {
+            evt.stopPropagation();
+            evt.preventDefault();
+            let files = evt.dataTransfer.files; // Array of all files
+            for (let n=0; n < files.length; n++) {
+                let file = files[n];
+                var reader = new FileReader();
+                reader.onload = function(e2) {
+                    let raw_data = e2.target.result;
+                    _load_data(raw_data, file.name.replace(/\.json$/, ""))
+                }
+                reader.readAsText(file);
+            }
+        });
         if (mode === "_demo_") {
             add_bubble(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
             save_popped = false;
@@ -1460,13 +1624,14 @@
 /*
  TODO...
 
+ surface tension adjustment
+ friction adjustment
  data gets corrupted when you open the same page in two different browser tabs
    localStorage += tabs={my_random_id: page, ...} - don't allow two tabs to open the same page
+ 'grid' could toggle between unlabeled graph paper, labeled polar coordinates, force vectors, etc..
  options panel - friction, all the physics constants, colors, whatever, save them
- save/restore to file
 
  bulk 'rectangle' select - Shift+drag - move/pop/etc a group of bubbles
- button: undo last pop
  search for bubble by name
 
  hover to see details
