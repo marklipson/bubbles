@@ -69,14 +69,14 @@
         bubbles.push(bubble);
         bubble_index[bubble.uuid] = bubble;
     }
-    function stick_bubbles(source, target) {
-        source.stick_to = target.uuid;
+    function stick_bubbles(source, target, length=50) {
+        source.stick_to = {target: target.uuid, length: length};
         target.refs.push(source.uuid);
     }
     function delete_bubble(bubble) {
         for (let nr=0; nr < bubble.refs; nr++) {
             let other = bubble_index[bubble.refs[nr]];
-            if (other && other.stick_to === bubble.uuid)
+            if (other && other.stick_to && other.stick_to.target === bubble.uuid)
                 other.stick_to = null;
         }
         const nb = bubbles.indexOf(bubble);
@@ -98,13 +98,16 @@
         // update the dropdown
         const save_sel = document.getElementById("saves");
         save_sel.innerHTML = "";
-        var opt = document.createElement("option");
+        let opt = document.createElement("option");
         opt.innerText = "---";
         opt.setAttribute("value", "");
         save_sel.appendChild(opt);
-        for (var n=0; n < saves.length; n++) {
-            var opt = document.createElement("option");
-            opt.innerText = saves[n];
+        for (let n=0; n < saves.length; n++) {
+            let opt = document.createElement("option");
+            let txt = saves[n];
+            if (txt.length > 20)
+                txt = txt.substring(0, 20) + "...";
+            opt.innerText = txt;
             save_sel.appendChild(opt);
         }
     }
@@ -128,8 +131,6 @@
         if (name === title)
             return;
         title = name;
-        const edt_title = document.getElementById("title");
-        edt_title.value = name;
         let data = JSON.parse(localStorage.getItem("save." + name));
         if (data === null)
             data = {bubbles: [], popped: []};
@@ -344,6 +345,8 @@
             this.r = r;
             this.r2 = r*r;
             this.uuid = uuid || make_uuid();
+            if (typeof(stick_to) == "string")
+                stick_to = {target: stick_to, length: 0};
             this.stick_to = stick_to;
             this.refs = [];
             this.color = color;
@@ -417,17 +420,18 @@
             const r = this.r - bubble_outer_margin;
             // indicator of bubble selection
             const is_click_source = capture_bubble_click  &&  capture_bubble_click.source === this;
-            if (is_click_source || bubble_index[this.stick_to]) {
+            const is_stuck_to = this.stick_to && bubble_index[this.stick_to.target];
+            if (is_click_source || is_stuck_to) {
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 let x0 = this.x, y0 = this.y;
                 let x1 = 0, y1 = 0;
                 if (is_click_source) {
-                    x1 = this.x + move1[0] - move00[0];
-                    y1 = this.y + move1[1] - move00[1];
+                    x1 = mouse_pos[0];
+                    y1 = mouse_pos[1];
                     ctx.strokeStyle = "red";
                 } else {
-                    const other = bubble_index[this.stick_to];
+                    const other = bubble_index[this.stick_to.target];
                     x1 = other.x;
                     y1 = other.y;
                     // move (x1, y1) to the edge of the other bubble
@@ -528,18 +532,18 @@
                 }
             }
             // pointer toward stuck-to bubble
-            if (this.stick_to  &&  bubble_index[this.stick_to]) {
-                const color = bubble_index[this.stick_to].color;
-                const to_x = bubble_index[this.stick_to].x;
-                const to_y = bubble_index[this.stick_to].y;
+            if (this.stick_to  &&  bubble_index[this.stick_to.target]) {
+                const color = bubble_index[this.stick_to.target].color;
+                const to_x = bubble_index[this.stick_to.target].x;
+                const to_y = bubble_index[this.stick_to.target].y;
                 let r = this.radius(to_x, to_y);
                 let a = Math.atan2(to_y - this.y, to_x - this.x);
                 const px = this.x + r * Math.cos(a);
                 const py = this.y + r * Math.sin(a);
                 ctx.beginPath();
                 ctx.moveTo(px, py);
-                ctx.lineTo(this.x + r*0.9*Math.cos(a-0.1), this.y + r*0.9*Math.sin(a-0.1));
-                ctx.lineTo(this.x + r*0.9*Math.cos(a+0.1), this.y + r*0.9*Math.sin(a+0.1));
+                ctx.lineTo(this.x + r*0.85*Math.cos(a-0.1), this.y + r*0.85*Math.sin(a-0.1));
+                ctx.lineTo(this.x + r*0.85*Math.cos(a+0.1), this.y + r*0.85*Math.sin(a+0.1));
                 ctx.closePath();
                 ctx.fillStyle = color;
                 ctx.fill();
@@ -569,58 +573,81 @@
                 }
             }
         }
-        forces(dt) {
+        force(dt, b, forces) {
             let fx=0, fy=0;
             const a = this;
-            this.restore_surface();
-            if (this.popping)
-                return [0, 0];
-            for (var nb=0; nb < bubbles.length; nb++){
-                const b = bubbles[nb];
-                if (a === b  ||  b.popping)
-                    continue;
-                const dx = b.x - a.x, dy = b.y - a.y;
-                const r2 = dx*dx + dy*dy;
-                const ab_r2 = a.r2 + b.r2 + 2*a.r*b.r;
-                const closeness = r2 - ab_r2;
-                const d = Math.sqrt(dx*dx+dy*dy);
-                let f_a = 0;
-                if (closeness < 0) {
-                    // bounciness
-                    f_a = Math.sqrt(-closeness) * bounce * this.bounce * dt;
-                    // show bounce visually
-                    const poke_angle = Math.atan2(dy, dx);
-                    let poke_depth = a.r + b.r - d;
-                    poke_depth /= 2;
-                    this.poke(poke_depth, poke_angle, d, b.r);
-                } else if (closeness < 10000) {
-                    // mild repulsion
-                    f_a = repulsion * dt * 10 / (closeness + 10);
-                }
-                // stuck to another bubble - follow closely
-                if (b.uuid === this.stick_to) {
-                    if (closeness > 200)
-                        f_a = -((closeness - 200)/200) * 2 * dt;
-                }
-                // gravity toward other bubble
-                else if (b.gravity) {
-                    const grav = b.gravity || 11;
-                    // if the target is not pinned we have to stop pushing or we'll just push the target around
-                    if (! b.fixed && closeness < 1000) {
-                        // inhibit gravity when very close if target is unpinned - otherwise it will get pushed around
-                    }
-                    else
-                        f_a += -grav * 5 * dt * 0.5**((d-b.r)/500) * Math.sqrt(this.weight);
-                }
-                // give the force (f_a) a direction
-                if (f_a && d) {
-                    fx -= f_a * dx/d;
-                    fy -= f_a * dy/d;
-                }
+            if (a === b  ||  b.popping)
+                return;
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const r2 = dx*dx + dy*dy;
+            const ab_r2 = a.r2 + b.r2 + 2*a.r*b.r;
+            const closeness = r2 - ab_r2;
+            const d = Math.sqrt(dx*dx+dy*dy);
+            let f_a = 0;
+            if (closeness < 0) {
+                // bounciness
+                f_a = Math.sqrt(-closeness) * bounce * this.bounce * dt;
+                // show bounce visually
+                const poke_angle = Math.atan2(dy, dx);
+                let poke_depth = a.r + b.r - d;
+                poke_depth /= 2;
+                this.poke(poke_depth, poke_angle, d, b.r);
+            } else if (closeness < 10000) {
+                // mild repulsion
+                f_a = repulsion * dt * 10 / (closeness + 10);
             }
+            // stuck to another bubble - follow closely
+            if (this.stick_to && b.uuid === this.stick_to.target) {
+                const stick_to_dist = this.stick_to.length;
+                const d_outer = (d - a.r - b.r) - stick_to_dist;
+                let pressure = 15*d_outer * dt;
+                //if (Math.abs(d_outer) < 4)
+                //    pressure = 0;
+                if (Math.abs(pressure) > 200)
+                    pressure = Math.sign(pressure)*200;
+                f_a -= pressure;
+                // damping to compensate for pre-existing velocity
+                //  - abv is pre-existing velocity
+                //  - c_abv is the dot product of velocity and position, i.e. amount of velocity in need of compensation
+                let abv = [a.vx - b.vx, a.vy - b.vy];
+                let c_abv = abv[0] * dx/d + abv[1] * dy/d;
+                if (Math.abs(c_abv) > 40)
+                    c_abv = Math.sign(c_abv)*40;
+                pressure -= c_abv/2.5;
+                // apply reciprocal force
+                add_force(forces, b.uuid, -pressure * dx/d, -pressure * dy/d)
+            }
+            // gravity toward other bubble
+            else if (b.gravity) {
+                const grav = b.gravity || 11;
+                // if the target is not pinned we have to stop pushing or we'll just push the target around
+                let f_g = -grav * 3 * dt * 0.5**((d-b.r)/500) * Math.sqrt(this.weight);
+                const d_outer = d - a.r - b.r;
+                if (d_outer < 10)
+                    f_g /= 2;
+                if (d_outer < 5)
+                    f_g /= 2;
+                f_a += f_g;
+                add_force(forces, b.uuid, f_g*dx/d, f_g*dy/d);
+            }
+            // give the force (f_a) a direction
+            if (f_a && d) {
+                fx -= f_a * dx/d;
+                fy -= f_a * dy/d;
+            }
+            add_force(forces, this.uuid, fx, fy);
+        }
+
+        /**
+         * Compute all forces.  In addition to calling force() to compute all forces between bubbles, we manage the
+         * bubble shape.  That is, we apply forces relating to the bubble's surface here.
+         */
+        compute_forces(dt, forces) {
+            this.restore_surface();
+            for (var nb=0; nb < bubbles.length; nb++)
+                this.force(dt, bubbles[nb], forces);
             this.squish = surface_tension(this.squish, 3);
-            if (this.dragging  ||  this.fixed  ||  this.popping)
-                return [0, 0];
+            /*
             // toward center
             const d0 = Math.sqrt(a.x*a.x + a.y*a.y);
             if (to_center && d0 > 30) {
@@ -628,16 +655,15 @@
                 fx -= f0c * a.x/d0;
                 fy -= f0c * a.y/d0;
             }
+            */
+        }
+        move(dt, force, friction) {
+            if (this.dragging  ||  this.fixed  ||  this.popping)
+                force = [0, 0];
             // the 'paper' prevents any force below a certain level
             // TODO combine fx+fy properly into a vector and use its length - the calculation below is 'square'
-            if (Math.abs(fx) < bg_friction  &&  Math.abs(fy) < bg_friction) {
-                fx = 0;
-                fy = 0;
-            }
-            return [fx, fy];
-        }
-        move(dt, friction) {
-            let force = this.forces(dt);
+            if (Math.abs(force[0]) < bg_friction  &&  Math.abs(force[1]) < bg_friction)
+                force = [0, 0];
             if (! isFinite(force[0]) || ! isFinite(force[1])) {
                 console.log("FORCE is " + force[0] + ", " + force[1])
                 force = [0, 0]
@@ -678,6 +704,13 @@
                 this.popping *= expand;
             }
         }
+    }
+    function add_force(forces, target, fx, fy) {
+        let f = forces[target];
+        if (! f)
+            forces[target] = f = [0, 0];
+        f[0] += fx;
+        f[1] += fy;
     }
     function draw_grid() {
         const ctx = the_context;
@@ -771,8 +804,15 @@
         const dt = Math.min(t - t0, 0.1);
         const friction = v_friction**dt;
         t0 = t;
-        for (var nb=0; nb < bubbles.length; nb++){
-            bubbles[nb].move(dt, friction);
+        const forces = {};
+        for (let nb=0; nb < bubbles.length; nb++){
+            bubbles[nb].compute_forces(dt, forces);
+        }
+        for (let nb=0; nb < bubbles.length; nb++){
+            let f = forces[bubbles[nb].uuid];
+            if (! f)
+                f = [0, 0];
+            bubbles[nb].move(dt, f, friction);
             bubbles[nb].draw(ctx);
         }
         // additional animations
@@ -870,15 +910,6 @@
             // gravity
             edit_value("gravity",function(){ return bubble.gravity; }, function(v){ bubble.gravity = v; }, area, 0, 20);
             area.appendChild(document.createElement("br"));
-            // pinned
-            const btn_pinned = document.createElement("button");
-            btn_pinned.setAttribute("title", "When a bubble is 'pinned' it cannot be moved by other bubbles.");
-            btn_pinned.innerText = bubble.fixed ? "PINNED" : "   pin   ";
-            btn_pinned.addEventListener("click", function() {
-                bubble.fixed = ! bubble.fixed;
-                btn_pinned.innerText = bubble.fixed ? "PINNED" : "   pin   ";
-            });
-            area.appendChild(btn_pinned);
             // stick-to
             const btn_stick = document.createElement("button");
             btn_stick.setAttribute("title", "Attaches a stretchy line to another bubble.");
@@ -901,6 +932,33 @@
                 btn_stick.innerText = bubble.stick_to ? "unstick" : "stick-to";
             });
             area.appendChild(btn_stick);
+            // - stick-to length
+            const btn_shorter = document.createElement("button");
+            btn_shorter.setAttribute("title", "shorter connector");
+            btn_shorter.innerText = "--"
+            button_repeater(btn_shorter, function(){
+                if (bubble.stick_to)
+                    bubble.stick_to.length = Math.max(bubble.stick_to.length - 2, 0);
+            }, 40);
+            area.appendChild(btn_shorter);
+            const btn_longer = document.createElement("button");
+            btn_longer.setAttribute("title", "longer connector");
+            btn_longer.innerText = "++"
+            button_repeater(btn_longer, function(){
+                if (bubble.stick_to)
+                    bubble.stick_to.length += 2;
+            }, 40);
+            area.appendChild(btn_longer);
+            area.appendChild(document.createElement("br"));
+            // pinned
+            const btn_pinned = document.createElement("button");
+            btn_pinned.setAttribute("title", "When a bubble is 'pinned' it cannot be moved by other bubbles.");
+            btn_pinned.innerText = bubble.fixed ? "PINNED" : "   pin   ";
+            btn_pinned.addEventListener("click", function() {
+                bubble.fixed = ! bubble.fixed;
+                btn_pinned.innerText = bubble.fixed ? "PINNED" : "   pin   ";
+            });
+            area.appendChild(btn_pinned);
             // pop bubble
             const btn_pop = document.createElement("button");
             btn_pop.setAttribute("title", "Pop a bubble.  Goodbye, bubble.");
@@ -1058,29 +1116,20 @@
         }
         button_repeater(document.getElementById("zoom-in"), function() { change_zoom(1.25, 6)}, 240)
         button_repeater(document.getElementById("zoom-out"), function() { change_zoom(1/1.25, 6)}, 240)
-        const edt_title = document.getElementById("title");
         const save_sel = document.getElementById("saves");
-        function title_change() {
-            // title changed
-            const edited = edt_title.value || "default";
-            if (edited === title)
-                return;
-            if (edited === "") {
-                edt_title.value = title;
-                return;
-            }
+        function rename(new_title) {
             const saves = all_saves();
-            if (saves.indexOf(edited) >= 0) {
+            if (saves.indexOf(new_title) >= 0) {
                 // warn on overwrite
-                if (! confirm("Are you sure you want to replace '" + edited + "'?"))
+                if (! confirm("Are you sure you want to replace '" + new_title + "'?"))
                     return;
             }
             // change title, rename saved data
-            title = edited;
+            title = new_title;
             let n = saves.indexOf(title);
             if (n >= 0)
                 saves.splice(n, 1);
-            saves.push(edited);
+            saves.push(title);
             upd_saves(saves);
             // save right away
             save();
@@ -1089,13 +1138,13 @@
             // bookmarkable
             window.location.hash = title;
         }
-        edt_title.addEventListener("keydown", function(evt) {
-            if (evt.code === "Enter") {
-                edt_title.blur();
+        const btn_rename = document.getElementById("rename-file");
+        btn_rename.addEventListener("click", function(){
+            const new_title = prompt("Rename", title);
+            if (new_title  &&  new_title !== title) {
+                rename(new_title)
             }
         });
-        // rename on Enter/blur of title editor
-        edt_title.addEventListener("blur", title_change);
         // detect hash change from browser back/fwd buttons
         window.addEventListener("hashchange", function(){
             save();
@@ -1123,7 +1172,7 @@
             clear();
             set_pan_zoom(0, 0, 1);
             title = new_title;
-            save(tite);
+            save(title);
             load(title);
         });
         // 'delete'
