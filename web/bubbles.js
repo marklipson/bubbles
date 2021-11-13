@@ -365,12 +365,26 @@
             this.popping = 0;
             this.restore_surface();
         }
+
+        /**
+         * Return to being a perfect circle.  We call this at the beginning of force calculation and call poke()
+         * to deform the surface.
+         */
         restore_surface() {
             const sq = []
             for (var n=0; n < 100; n++)
                 sq.push(this.r);
             this.squish = sq;
         }
+
+        /**
+         * Deform the surface.  This should only be drawn once per "poking force" per frame.
+         *
+         * @param depth     Depth of the incursion.
+         * @param angle     Central point of (assumed-to-be-spherical) incursion.
+         * @param other_d   Distance to poking  object.
+         * @param other_r   Radius of poking object.
+         */
         poke(depth, angle, other_d, other_r) {
             const npts = this.squish.length;
             const to_n = 6.284 / npts;
@@ -378,11 +392,15 @@
             let c = other_r;
             let b = this.r;
             let a = other_d;
+            // 'w_poke' is the angular width from the center of incursion to the edge of 'spherical overlap'
             let w_poke = Math.acos((a*a + b*b - c*c) / (2*a*b));
             if (isNaN(w_poke))
-                // entirely inside
+                // entirely inside - no point in deformation
                 return;
+            // limit to deformation
             const max_sq = this.r * 0.85;
+            // this method determines how much 'squish' to apply at a given angle
+            //  - it is a completely made up formula which looks nice for small pokes but gets really weird for deeper ones
             function f(a) {
                 var wx = (a - angle)/w_poke;
                 var da = Math.cos(1.57 * wx);
@@ -391,12 +409,17 @@
                 var dd = da**0.25 * depth;
                 return Math.min(dd, max_sq);
             }
+            // decrease radius within the range of spherical overlap
             const nr = Math.floor(w_poke / to_n + 0.5);
             for (var n=ai-nr; n <= ai+nr; n ++) {
                 const n1 = (n + npts) % npts;
                 this.squish[n1] -= f(n * 6.284 / npts);
             }
         }
+
+        /**
+         * Calculate radius of bubble in a given direction (toward a given point).
+         */
         radius(px, py) {
             let r = this.r;
             const a = Math.atan2(py - this.y, px - this.x)
@@ -407,15 +430,27 @@
             }
             return r;
         }
+
+        /**
+         * Calculate (x, y) of polar coordinates relative to this bubble.
+         */
         polar(a, r) {
             return [
                 this.x + Math.cos(a) * r,
                 this.y + Math.sin(a) * r
             ];
         }
+
+        /**
+         * Compute bubble wall thickness for drawing.  This is currently based on 'weight'.
+         */
         wall_width() {
             return bubble_wall * Math.max(0.1, Math.log(4*this.weight));
         }
+
+        /**
+         * Draw this bubble.
+         */
         draw(ctx) {
             const r = this.r - bubble_outer_margin;
             // indicator of bubble selection
@@ -573,6 +608,16 @@
                 }
             }
         }
+
+        /**
+         * Calculate forces involving another bubble.  One bubble or another might initiate a force.  For stick-to,
+         * for instance, the 'sticker' applies a force to itself and the 'stickee'.  For gravity, bubbles apply their
+         * own gravity to self and others, and if both bubbles have gravity two sets of forces are applied.
+         *
+         * @param dt        Width of time slice.
+         * @param b         Other bubble.
+         * @param forces    All computed forces get added here.  Map of uuid->[fx, fy].
+         */
         force(dt, b, forces) {
             let fx=0, fy=0;
             const a = this;
@@ -585,7 +630,7 @@
             const d = Math.sqrt(dx*dx+dy*dy);
             let f_a = 0;
             if (closeness < 0) {
-                // bounciness
+                // bounciness (outward force resisting deformation) - linearly increasing force
                 f_a = Math.sqrt(-closeness) * bounce * this.bounce * dt;
                 // show bounce visually
                 const poke_angle = Math.atan2(dy, dx);
@@ -596,13 +641,12 @@
                 // mild repulsion
                 f_a = repulsion * dt * 10 / (closeness + 10);
             }
-            // stuck to another bubble - follow closely
+            // stuck to another bubble - follow closely at a prescribed distance
             if (this.stick_to && b.uuid === this.stick_to.target) {
                 const stick_to_dist = this.stick_to.length;
                 const d_outer = (d - a.r - b.r) - stick_to_dist;
+                // linear pressure but fairly strong
                 let pressure = 15*d_outer * dt;
-                //if (Math.abs(d_outer) < 4)
-                //    pressure = 0;
                 if (Math.abs(pressure) > 200)
                     pressure = Math.sign(pressure)*200;
                 f_a -= pressure;
@@ -619,15 +663,16 @@
             }
             // gravity toward other bubble
             else if (b.gravity) {
-                const grav = b.gravity || 11;
-                // if the target is not pinned we have to stop pushing or we'll just push the target around
-                let f_g = -grav * 3 * dt * 0.5**((d-b.r)/500) * Math.sqrt(this.weight);
+                // this is NOT an inverse square, which drops off too quickly
+                let f_g = -b.gravity * 3 * dt * 0.5**((d-b.r)/500) * Math.sqrt(this.weight);
+                // reduce gravity at short range to avoid wiggling
                 const d_outer = d - a.r - b.r;
                 if (d_outer < 10)
                     f_g /= 2;
                 if (d_outer < 5)
                     f_g /= 2;
                 f_a += f_g;
+                // reciprocal force
                 add_force(forces, b.uuid, f_g*dx/d, f_g*dy/d);
             }
             // give the force (f_a) a direction
@@ -639,8 +684,12 @@
         }
 
         /**
-         * Compute all forces.  In addition to calling force() to compute all forces between bubbles, we manage the
-         * bubble shape.  That is, we apply forces relating to the bubble's surface here.
+         * Compute all forces 'belonging to' this bubble (see force()).
+         *
+         * In addition to calling force() to compute all forces between bubbles, we manage the
+         * bubble shape.  That is, we apply forces relating to the bubble's surface here:
+         *   - restore_surface() resets to a circle, then
+         *   - we call force(), which calls poke(), which deforms bubbles based on 'incursion'
          */
         compute_forces(dt, forces) {
             this.restore_surface();
@@ -657,6 +706,15 @@
             }
             */
         }
+
+        /**
+         * Move this bubble based on computed forces.  All forces for all bubbles need to be computed--see frame().
+         *
+         * @param dt            Width of time slice.
+         * @param force         Amount of force being applied.
+         * @param friction      Surface friction value which takes 'dt' into account--0 is like floating in space,
+         *                      1 allows no drift whatsoever.
+         */
         move(dt, force, friction) {
             if (this.dragging  ||  this.fixed  ||  this.popping)
                 force = [0, 0];
@@ -705,6 +763,15 @@
             }
         }
     }
+
+    /**
+     * Add a single force to a set of inter-bubbular forces.
+     *
+     * @param forces        Mapping from UUID to [fx, fy]
+     * @param target        UUID to apply force to.
+     * @param fx            Amount of force.
+     * @param fy            Amount of force.
+     */
     function add_force(forces, target, fx, fy) {
         let f = forces[target];
         if (! f)
@@ -712,6 +779,10 @@
         f[0] += fx;
         f[1] += fy;
     }
+
+    /**
+     * Draw a graph papery grid.
+     */
     function draw_grid() {
         const ctx = the_context;
         const w = the_canvas.width / zoom;
@@ -734,6 +805,10 @@
         ctx.fillRect(-1, -100, 3, 200);
         //ctx.fillText("PAN=" + pan[0] + ", " + pan[1], pan[0], pan[1])
     }
+
+    /**
+     * Animate popping of a bubble, then delete the bubble.
+     */
     function pop_bubble(bubble) {
         if (bubble.popping  ||  bubble.popped_at)
             return;
@@ -780,6 +855,10 @@
         }
         animators.push(pop_frame);
     }
+
+    /**
+     * Draw each frame!
+     */
     function frame() {
         const ctx = the_context;
         const z = zoom;
@@ -827,6 +906,11 @@
             animators.splice(animators.indexOf(remove_anims[na]), 1);
         }
     }
+
+    /**
+     * Detect whether a given point is over a bubble.  Takes 'squishiness' of bubbles into account, as well as possible
+     * overlap of highly compacted bubbles.
+     */
     function overbubble(x, y) {
         let best = null;
         let d_best = null;
@@ -843,6 +927,10 @@
         }
         return best;
     }
+
+    /**
+     * Draw and enable all controls relating to a selected bubble.
+     */
     function draw_bubble_form(bubble, area) {
         function refresh() {
             if (! bubble.selected)
@@ -994,7 +1082,7 @@
     }
 
     /**
-     * Show popped bubbles.
+     * Display all popped bubbles in a table.
      */
     function show_popped_bubbles() {
         const area = show_dialog();
@@ -1279,6 +1367,10 @@
         //    console.log(evt);
         //});
     }
+
+    /**
+     * Choose one bubble and show controls to modify it.
+     */
     function select_bubble(bubble) {
         const select = bubble && ! bubble.selected;
         // deselect all bubbles
@@ -1295,6 +1387,9 @@
         }
     }
 
+    /**
+     * Add a random bubble near the center (used for demo mode).
+     */
     function add_random_bubble() {
         var px = Math.random()*900 - 450;
         var py = Math.random()*900 - 450;
@@ -1302,6 +1397,10 @@
         var c = r_colors[Math.floor(Math.random()*r_colors.length)];
         add_bubble(new Bubble(px, py, r, c, ''));
     }
+
+    /**
+     * Entry point!
+     */
     function setup() {
         let mode = window.location.hash;
         if (mode.startsWith("#"))
@@ -1353,32 +1452,22 @@
                 add_bubble(new Bubble(0, 0, 140, 'blue', 'double click to add a bubble\nclick to change or drag', true, 1, 1, 5));
         }
     }
+
+    // connect entry point
     window.addEventListener("load", setup);
 })();
 
 /*
  TODO...
 
- adjustable stick-to line length
- two tabs same page
+ data gets corrupted when you open the same page in two different browser tabs
    localStorage += tabs={my_random_id: page, ...} - don't allow two tabs to open the same page
+ options panel - friction, all the physics constants, colors, whatever, save them
  save/restore to file
-
- stick-to force should be symmetrical
- adjustable angular friction for stick-to
 
  bulk 'rectangle' select - Shift+drag - move/pop/etc a group of bubbles
  button: undo last pop
  search for bubble by name
- it has frozen up a couple times and you can't select anything
- gravity and weight could be combined
- drag should perhaps not select?
- options panel - friction, all the physics constants, colors, whatever, save them
- energy is leaking into the system, causing bubbles to spin instead of settle down (not enough entropy somewhere)
- optimize - don't paint off-screen stuff
- option to show off-screen bubbles (thin arrows around the edge of the page, possibly with labels)
- stick-to button needs to say 'now click on a bubble'
- surface tension adjustment
 
  hover to see details
  wrap text to bubble?
