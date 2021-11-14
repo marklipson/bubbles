@@ -1,8 +1,4 @@
 (function(){
-    // overall gravity toward center
-    let to_center = 0;   // originally 18
-    // closer to 1: free floating, closer to 0: lots of friction - atmospheric friction?
-    let v_friction = 0.3;
     // how hard bubbles push one another away when touching
     let bounce = 0.7;
     // how hard bubbles push one another away when close
@@ -11,10 +7,15 @@
     let bubble_wall = 5;
     // margin around bubbles
     let bubble_outer_margin = 4;
-    // overall reduction of force
+    // overall reduction of force (needs a better name)
     let inertia = 0.3;
     // stickiness of background - forces less than this will be ignored
     let bg_friction = 0.4;
+    // closer to 1: free floating, closer to 0: lots of friction - 'viscosity'?,
+    let v_friction = 0.3;
+    // how much force the stick-to strings have (higher = tighter)
+    let spring_force = 15;
+    let spring_damping = 0.4;
     // minimum bubble size
     let min_bubble_r = 15;
     let max_bubble_r = 2000;
@@ -22,7 +23,7 @@
     let min_zoom = 0.08;
     let max_zoom = 9;
     // show grid
-    let show_grid = true;
+    let show_grid = "grid";
     // available colors
     const r_colors = [
         "black", "gray",
@@ -39,11 +40,24 @@
         "royalblue", "darkslateblue", "slateblue",
         "purple", "darkviolet"
     ];
+    // grid styles
+    const grid_styles = [
+        "grid",
+        "polar",
+        "no grid"
+    ];
+    // friction etc.
+    const physics_presets = [
+        {name: "friction: low", v_friction: 0.9, bg_friction: 0.1, inertia: 0.2, spring_force: 10, spring_damping: 0.6, bounce: 0.4},
+        {name: "friction: med", v_friction: 0.3, bg_friction: 0.4, inertia: 0.3, spring_force: 15, spring_damping: 0.4, bounce: 0.7},
+        {name: "friction: high", v_friction: 0.1, bg_friction: 0.7, inertia: 0.2, spring_force: 20, spring_damping: 0.3, bounce: 0.7}
+    ];
     /////////
     // colors
     let sel_color = "rgba(255,255,128,128)";  // "#ffff80";
     let bg_color = "#e0e0e0";
-    let grid_color = "#c0c0ff";
+    let grid_color = "#c0d0ff";
+    let grid_label_color = "#a0b0e8";
     let space_color = "#80a0c0";
     //
     let frame_rate = 40;
@@ -142,7 +156,12 @@
         let out_p = [];
         for (let n=0; n < popped.length; n++)
             out_p.push(reduce(popped[n]));
-        return JSON.stringify({"bubbles": out, "popped": out_p, "pan": pan, "zoom": zoom}, null, indent);
+        const world = {
+            v_friction: v_friction, bg_friction: bg_friction, inertia: inertia,
+            spring_force: spring_force, spring_damping: spring_damping, bounce: bounce,
+            show_grid: show_grid
+        }
+        return JSON.stringify({"bubbles": out, "popped": out_p, "pan": pan, "zoom": zoom, world: world}, null, indent);
     }
     function save(name="") {
         name = name || title || "default";
@@ -192,6 +211,32 @@
         popped = data.popped;
         if (data.pan && data.zoom)
             set_pan_zoom(data.pan[0], data.pan[1], data.zoom);
+        // world properties
+        if (data.world) {
+            if (data.world.v_friction) {
+                v_friction = data.world.v_friction;
+                // update controls
+                const btn_friction = document.getElementById("friction-etc");
+                for (let n=0; n < physics_presets.length; n++)
+                    if (physics_presets[n].v_friction === v_friction)
+                        btn_friction.innerText = physics_presets[n].name;
+            }
+            if (data.world.bg_friction)
+                bg_friction = data.world.bg_friction;
+            if (data.world.inertia)
+                inertia = data.world.inertia;
+            if (data.world.spring_force)
+                spring_force = data.world.spring_force;
+            if (data.world.spring_damping)
+                spring_damping = data.world.spring_damping;
+            if (data.world.bounce)
+                bounce = data.world.bounce;
+            if (data.world.show_grid) {
+                show_grid = data.world.show_grid;
+                const btn_grid = document.getElementById("show-grid");
+                btn_grid.innerText = data.world.show_grid;
+            }
+        }
         // make it bookmarkable
         window.location.hash = title;
         document.title = title + " - Bubbles";
@@ -444,7 +489,7 @@
                 // entirely inside - no point in deformation
                 return;
             // limit to deformation
-            const max_sq = this.r * 0.85;
+            const max_sq = this.r * 0.70;
             // this method determines how much 'squish' to apply at a given angle
             //  - it is a completely made up formula which looks nice for small pokes but gets really weird for deeper ones
             function f(a) {
@@ -678,6 +723,8 @@
             if (closeness < 0) {
                 // bounciness (outward force resisting deformation) - linearly increasing force
                 f_a = Math.sqrt(-closeness) * bounce * this.bounce * dt;
+                f_a /= 2;
+                add_force(forces, b.uuid, f_a * dx/d, f_a * dy/d)
                 // show bounce visually
                 const poke_angle = Math.atan2(dy, dx);
                 let poke_depth = a.r + b.r - d;
@@ -692,7 +739,7 @@
                 const stick_to_dist = this.stick_to.length;
                 const d_outer = (d - a.r - b.r) - stick_to_dist;
                 // linear pressure but fairly strong
-                let pressure = 15*d_outer * dt;
+                let pressure = spring_force*d_outer * dt;
                 if (Math.abs(pressure) > 200)
                     pressure = Math.sign(pressure)*200;
                 f_a -= pressure;
@@ -703,7 +750,7 @@
                 let c_abv = abv[0] * dx/d + abv[1] * dy/d;
                 if (Math.abs(c_abv) > 40)
                     c_abv = Math.sign(c_abv)*40;
-                pressure -= c_abv/2.5;
+                pressure -= c_abv*spring_damping;
                 // apply reciprocal force
                 add_force(forces, b.uuid, -pressure * dx/d, -pressure * dy/d)
             }
@@ -714,9 +761,9 @@
                 // reduce gravity at short range to avoid wiggling
                 const d_outer = d - a.r - b.r;
                 if (d_outer < 10)
-                    f_g /= 2;
+                    f_g /= 1.2;
                 if (d_outer < 5)
-                    f_g /= 2;
+                    f_g /= 1.2;
                 f_a += f_g;
                 // reciprocal force
                 add_force(forces, b.uuid, f_g*dx/d, f_g*dy/d);
@@ -831,25 +878,58 @@
      */
     function draw_grid() {
         const ctx = the_context;
-        const w = the_canvas.width / zoom;
-        const h = the_canvas.height / zoom;
-        let x0 = pan[0] - w/2;
-        let y0 = pan[1] - h/2;
-        const grid_size = 100;
-        const n_x = Math.floor(w / grid_size) + 1;
-        const n_y = Math.floor(h / grid_size) + 1;
-        const gx0 = x0 - x0 % grid_size;
-        const gy0 = y0 - y0 % grid_size;
-        ctx.fillStyle = grid_color;
-        for (let ny=0; ny < n_y; ny++)
-            ctx.fillRect(x0, gy0 + ny*grid_size, w, 1);
-        for (let nx=0; nx < n_x; nx++)
-            ctx.fillRect(gx0 + nx*grid_size, y0, 1, h);
-        // DEBUG
+        if (show_grid === "grid") {
+            const w = the_canvas.width / zoom;
+            const h = the_canvas.height / zoom;
+            let x0 = pan[0] - w / 2;
+            let y0 = pan[1] - h / 2;
+            const grid_size = 100;
+            const n_x = Math.floor(w / grid_size) + 1;
+            const n_y = Math.floor(h / grid_size) + 1;
+            const gx0 = x0 - x0 % grid_size;
+            const gy0 = y0 - y0 % grid_size;
+            ctx.fillStyle = grid_color;
+            for (let ny = 0; ny < n_y; ny++)
+                ctx.fillRect(x0, gy0 + ny * grid_size, w, 1);
+            for (let nx = 0; nx < n_x; nx++)
+                ctx.fillRect(gx0 + nx * grid_size, y0, 1, h);
+        } else if (show_grid === "polar") {
+            ctx.strokeStyle = grid_color;
+            ctx.fillStyle = grid_label_color;
+            ctx.textAlign = "left";
+            ctx.font = "18px sans-serif";
+            for (let r=200; r < world_r; r += 200) {
+                ctx.lineWidth = (r % 1000 === 0) ? 5 : 2;
+                ctx.beginPath();
+                ctx.ellipse(0, 0, r, r, 0, 0, 6.284);
+                ctx.stroke();
+                ctx.fillText(r.toString(), 6, -r - 5);
+            }
+            ctx.lineCap = "butt";
+            ctx.textAlign = "center";
+            for (let a=0; a < 360; a += 15) {
+                ctx.lineWidth = (a % 45 === 0) ? 5 : 2;
+                let va = -a * Math.PI / 180;
+                ctx.beginPath();
+                ctx.moveTo(200*Math.cos(va), 200*Math.sin(va));
+                ctx.lineTo(world_r*Math.cos(va), world_r*Math.sin(va));
+                ctx.stroke();
+                ctx.save();
+                if (a > 90 && a < 270) {
+                    ctx.translate(500 * Math.cos(va + 0.01), 500 * Math.sin(va + 0.01));
+                    ctx.rotate(va + Math.PI);
+                } else {
+                    ctx.translate(500 * Math.cos(va - 0.01), 500 * Math.sin(va - 0.01));
+                    ctx.rotate(va);
+                }
+                ctx.fillText(a.toString(),0, 0);
+                ctx.restore();
+            }
+        }
+        // cross-hairs in middle
         ctx.fillStyle = "darkgray";
         ctx.fillRect(-100, -1, 200, 3);
         ctx.fillRect(-1, -100, 3, 200);
-        //ctx.fillText("PAN=" + pan[0] + ", " + pan[1], pan[0], pan[1])
     }
 
     /**
@@ -921,8 +1001,7 @@
         ctx.clip();
         ctx.fillStyle = bg_color;
         ctx.fillRect(pan[0] - sw/2/z, pan[1] - sh/2/z, sw/z, sh/z)
-        if (show_grid)
-            draw_grid();
+        draw_grid();
         ctx.restore();
         // move & draw bubbles
         const t = new Date().getTime();
@@ -1043,6 +1122,9 @@
             area.appendChild(document.createElement("br"));
             // gravity
             edit_value("gravity",function(){ return bubble.gravity; }, function(v){ bubble.gravity = v; }, area, 0, 20);
+            area.appendChild(document.createElement("br"));
+            // bounciness
+            edit_value("pressure",function(){ return bubble.bounce; }, function(v){ bubble.bounce = v; }, area, 0.1, 5);
             area.appendChild(document.createElement("br"));
             // stick-to
             const btn_stick = document.createElement("button");
@@ -1411,8 +1493,10 @@
         });
         // 'grid'
         const btn_grid = document.getElementById("show-grid");
-        btn_grid.addEventListener("click", function(){
-            show_grid = ! show_grid;
+        btn_grid.addEventListener("click", function(evt){
+            let n_style = (grid_styles.indexOf(evt.target.innerText) + 1) % grid_styles.length;
+            show_grid = grid_styles[n_style];
+            evt.target.innerText = show_grid;
         });
         //
         function to_ctx_coords(evt) {
@@ -1533,6 +1617,35 @@
     }
 
     /**
+     * Support file drop.
+     */
+    function file_drop(target) {
+        // if you don't intercept 'dragover', 'drop' doesn't seem to fire
+        target.addEventListener('dragover', function(evt) {
+            evt.stopPropagation();
+            evt.preventDefault();
+            // rumored to do something cool in Chrome
+            evt.dataTransfer.dropEffect = 'copy';
+        });
+        // file dropped...
+        target.addEventListener("drop", function(evt) {
+            evt.stopPropagation();
+            evt.preventDefault();
+            let files = evt.dataTransfer.files; // Array of all files
+            for (let n=0; n < files.length; n++) {
+                // TODO do something reasonable if multiple files are dropped
+                let file = files[n];
+                var reader = new FileReader();
+                reader.onload = function(e_done) {
+                    let raw_data = e_done.target.result;
+                    _load_data(raw_data, file.name.replace(/\.(json|bubbles)$/, ""))
+                }
+                reader.readAsText(file);
+            }
+        });
+    }
+
+    /**
      * Entry point!
      */
     function setup() {
@@ -1566,31 +1679,24 @@
             let data = _save_data(2);
             let link = document.createElement("a");
             link.setAttribute("href", "data:application/json;base64," + btoa(data));
-            link.setAttribute("download", title + ".json");
+            link.setAttribute("download", title + ".bubbles");
             link.setAttribute("target", "_blank");
             link.click();
         });
-        // FIXME the_canvas changes when window resizes
-        // FIXME this isn't receiving file drops yet
-        the_canvas.addEventListener('dragover', function(e) {
-            e.stopPropagation();
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'copy';
-        });
-        the_canvas.addEventListener("drop", function(evt) {
-            evt.stopPropagation();
-            evt.preventDefault();
-            let files = evt.dataTransfer.files; // Array of all files
-            for (let n=0; n < files.length; n++) {
-                let file = files[n];
-                var reader = new FileReader();
-                reader.onload = function(e2) {
-                    let raw_data = e2.target.result;
-                    _load_data(raw_data, file.name.replace(/\.json$/, ""))
+        document.getElementById("friction-etc").addEventListener("click", function(evt){
+            // click through presets
+            for (let n=0; n < physics_presets.length; n++) {
+                if (evt.target.innerText === physics_presets[n].name) {
+                    const preset = physics_presets[(n + 1) % physics_presets.length];
+                    evt.target.innerText = preset.name;
+                    v_friction = preset.v_friction;
+                    bg_friction = preset.bg_friction;
+                    inertia = preset.inertia;
+                    break;
                 }
-                reader.readAsText(file);
             }
         });
+        file_drop(the_canvas);
         if (mode === "_demo_") {
             add_bubble(new Bubble(0, 0, 140, 'blue', 'bubbles!', true));
             save_popped = false;
@@ -1624,13 +1730,10 @@
 /*
  TODO...
 
- surface tension adjustment
- friction adjustment
+  new coord type: longitude & latitude
+
  data gets corrupted when you open the same page in two different browser tabs
    localStorage += tabs={my_random_id: page, ...} - don't allow two tabs to open the same page
- 'grid' could toggle between unlabeled graph paper, labeled polar coordinates, force vectors, etc..
- options panel - friction, all the physics constants, colors, whatever, save them
-
  bulk 'rectangle' select - Shift+drag - move/pop/etc a group of bubbles
  search for bubble by name
 
@@ -1639,6 +1742,5 @@
  JIRA link per bubble
 
  instructions
-   double click to create new bubble
-   link to demo mode
+ demo mode
  */
