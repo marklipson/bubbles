@@ -59,6 +59,7 @@
     let grid_color = "#c0d0ff";
     let grid_label_color = "#a0b0e8";
     let space_color = "#80a0c0";
+    let bubble_opacity = 0.3;
     //
     let frame_rate = 40;
     // all bubbles
@@ -79,6 +80,40 @@
     let capture_bubble_click = null;
     let bubble_index = {};
     let animators = [];
+    //
+    const _color_values = {};
+    function color_name_to_rgba(name) {
+        if (! _color_values[name]) {
+            var canvas = document.createElement('canvas');
+            var context = canvas.getContext('2d');
+            context.fillStyle = name;
+            context.fillRect(0, 0, 1, 1);
+            _color_values[name] = context.getImageData(0, 0, 1, 1).data;
+        }
+        return _color_values[name];
+    }
+    function rgb_to_hue(rgb) {
+        const r = rgb[0] / 255;
+        const g = rgb[1] / 255;
+        const b = rgb[2] / 255;
+        const mx = Math.max(r, g, b);
+        const mn = Math.min(r, g, b);
+        // place grays after colors
+        if (Math.abs(mx - mn) < 0.05)
+            return 6 + Math.sqrt(r*r + g*g + b*b);
+        // colors with a discernible hue
+        let hue = 0;
+        if (r === mx)
+            hue = (g - b) / (mx - mn);
+        else if (g === mx)
+            hue = 2 + (b - r) / (mx - mn);
+        else
+            hue = 4 + (r - g) / (mx - mn);
+        if (hue < 0)
+            hue += 6;
+        return hue;
+    }
+    //
     function add_bubble(bubble) {
         bubbles.push(bubble);
         bubble_index[bubble.uuid] = bubble;
@@ -424,22 +459,25 @@
         }
         return o;
     }
-    //
+
+    /**
+     * Representation of a bubble.
+     */
     class Bubble {
         constructor(x, y, r, color, text="", fixed=false, weight=1, bounce=1, gravity=0, uuid=null, stick_to=null) {
-            this.x = x;
-            this.y = y;
-            this.vx = 0;
-            this.vy = 0;
+            // pre-validation
             if (r < min_bubble_r)
                 r = min_bubble_r;
+            if (r > max_bubble_r)
+                r = max_bubble_r;
+            // all the persistent properties
+            this.x = x;
+            this.y = y;
             this.r = r;
-            this.r2 = r*r;
             this.uuid = uuid || make_uuid();
             if (typeof(stick_to) == "string")
                 stick_to = {target: stick_to, length: 0};
             this.stick_to = stick_to;
-            this.refs = [];
             this.color = color;
             this.text = text;
             this.weight = weight;
@@ -448,13 +486,34 @@
             this.gravity = gravity;
             this.created_at = new Date().getTime();
             this.popped_at = null;
-            // view-related
+            // only used for viewing (not persisted)
+            // - radii of points on surface (i.e. shape of bubble)
+            this.squish = [];
+            // 'reverse ip' for bubble references (not persisted)
+            this.refs = [];
+            // velocity
+            this.vx = 0;
+            this.vy = 0;
+            // for very minor optimization
+            this.r2 = r*r;
+            // very specific view flags
             this.dragging = false;
             this.selected = false;
-            this.squish = [];
             this.change_size = 0;
             this.popping = 0;
+            // fills in 'squish'
             this.restore_surface();
+        }
+
+        /**
+         * Make a copy.
+         */
+        clone() {
+            let out = new Bubble(this.x, this.y, this.r, this.color, this.text, this.fixed, this.weight, this.bounce,
+                this.gravity, this.uuid, this.stick_to);
+            out.created_at = this.created_at;
+            out.popped_at = this.popped_at;
+            return out;
         }
 
         /**
@@ -574,6 +633,29 @@
                 ctx.lineTo(x1, y1);
                 ctx.stroke();
             }
+            // seek targets
+            if (this.seek_forces) {
+                ctx.strokeStyle = "green";
+                ctx.lineWidth = 2;
+                for (let nb=0; nb < this.seek_forces.length; nb++) {
+                    const score = this.seek_forces[nb][0];
+                    ctx.lineWidth = score;
+                    let b = this.seek_forces[nb][1];
+                    let x0 = this.x;
+                    let y0 = this.y;
+                    let x1 = b.x;
+                    let y1 = b.y;
+                    // move (x1, y1) to the edge of the other bubble
+                    let r_d = b.radius(x0, y0) / Math.sqrt((x1-x0)**2 + (y1-y0)**2);
+                    x1 -= (x1-x0)*r_d;
+                    y1 -= (y1-y0)*r_d;
+                    ctx.beginPath();
+                    ctx.moveTo(x0, y0);
+                    ctx.lineTo(x1, y1);
+                    ctx.stroke();
+                    // FIXME draw arrow head
+                }
+            }
             // trace outline of bubble
             ctx.beginPath();
             if (this.squish) {
@@ -600,7 +682,7 @@
             // normal fill
             if (! this.popping) {
                 ctx.fillStyle = this.color;
-                ctx.globalAlpha = 0.3;
+                ctx.globalAlpha = bubble_opacity;
                 ctx.fill()
                 ctx.globalAlpha = 1;
             }
@@ -722,8 +804,11 @@
             let f_a = 0;
             if (closeness < 0) {
                 // bounciness (outward force resisting deformation) - linearly increasing force
+                // TODO this isn't quite right - large bubbles with a low pressure (this.bounce) should be more
+                //   noticeably different from a well inflated bubble, i.e. when a heavy bubble is at rest on the surface
+                //   and gravity is on.
                 f_a = Math.sqrt(-closeness) * bounce * this.bounce * dt;
-                f_a /= 2;
+                f_a *= this.r**-0.25;
                 add_force(forces, b.uuid, f_a * dx/d, f_a * dy/d)
                 // show bounce visually
                 const poke_angle = Math.atan2(dy, dx);
@@ -777,6 +862,59 @@
         }
 
         /**
+         * Forces powering a seek-type bubble.
+         */
+        seek_force(dt, forces) {
+            if (! this.text.startsWith("SEEK:")) {
+                this.seek_forces = null;
+                return;
+            }
+            this.seek_forces = [];
+            let words = this.text.substring(5).toLowerCase().split(/[^a-zA-Z0-9]+/);
+            let found = [];
+            let total = 0
+            for (var nb=0; nb < bubbles.length; nb++) {
+                const b = bubbles[nb];
+                if (! b.text  ||  b.popping)
+                    continue;
+                let b_words = b.text.toLowerCase().split(/[^a-zA-Z0-9]+/);
+                let score = 0;
+                for (let na=0; na < words.length; na++)
+                    if (b_words.indexOf(words[na]) >= 0)
+                        score += 1;
+                if (! score)
+                    continue;
+                this.seek_forces.push([score, b]);
+                let dx = b.x - this.x;
+                let dy = b.y - this.y;
+                let d = Math.sqrt(dx*dx + dy*dy);
+                let d_r = (d - b.r - this.r) / d;
+                let tx = this.x + d_r * dx;
+                let ty = this.y + d_r * dy;
+                total += score;
+                found.push([score*tx, score*ty]);
+            }
+            if (found.length > 0) {
+                let cx = 0, cy = 0;
+                for (let n=0; n < found.length; n++) {
+                    cx += found[n][0];
+                    cy += found[n][1];
+                }
+                cx /= total;
+                cy /= total;
+                let dx = cx - this.x;
+                let dy = cy - this.y;
+                let d = Math.sqrt(dx*dx + dy*dy);
+                const seek_speed = 20;
+                if (d > 10) {
+                    let fx = seek_speed * dt * dx/d;
+                    let fy = seek_speed * dt * dy/d;
+                    add_force(forces, this.uuid, fx, fy);
+                }
+            }
+        }
+
+        /**
          * Compute all forces 'belonging to' this bubble (see force()).
          *
          * In addition to calling force() to compute all forces between bubbles, we manage the
@@ -788,6 +926,13 @@
             this.restore_surface();
             for (var nb=0; nb < bubbles.length; nb++)
                 this.force(dt, bubbles[nb], forces);
+            if (this.text.startsWith("SEEK:")) {
+                let f0 = forces[this.uuid];
+                if (f0) {
+                    forces[this.uuid] = [f0[0]/2, f0[1]/2];
+                }
+                this.seek_force(dt, forces);
+            }
             this.squish = surface_tension(this.squish, 3);
             /*
             // toward center
@@ -945,9 +1090,9 @@
         const squishlen = bubble.squish.length;
         const avglen = 6.283 * bubble.r * 5 / squishlen;
         bubble.popped_at = new Date().getTime();
-        bubble.popping = 1;
         if (save_popped  &&  bubble.text)
-            popped.push(bubble);
+            popped.push(bubble.clone());
+        bubble.popping = 1;
         for (let nr=0; nr < squishlen; nr+=5) {
             const a = nr*6.283/squishlen;
             const c = bubble.polar(a, bubble.squish[nr]);
@@ -1224,7 +1369,7 @@
         hdrs.style.position = "sticky";
         hdrs.style.top = "0";
         table.appendChild(hdrs);
-        const cols = ["", "text", "r", "created_at"];
+        const cols = ["", "color", "text", "x", "y", "r", "created_at"];
         if (which === "popped")
             cols.push("popped_at");
         function link_action(add_to, text, action, tooltip) {
@@ -1259,19 +1404,19 @@
             let cell = document.createElement("th");
             cell.innerText = cols[n];
             if (cols[n] === "") {
-                link_action(cell, "all",function(){
-                    visit_bubble_checkboxes(function(cb, bubble) {
+                link_action(cell, "all", function () {
+                    visit_bubble_checkboxes(function (cb, bubble) {
                         cb.checked = true;
                     });
                 }, "Select all bubbles in this list.");
-                link_action(cell, "none",function(){
-                    visit_bubble_checkboxes(function(cb, bubble) {
+                link_action(cell, "none", function () {
+                    visit_bubble_checkboxes(function (cb, bubble) {
                         cb.checked = false;
                     });
                 }, "Un-select all bubbles in this list.");
-                link_action(cell, (which === "popped") ? "delete" : "pop",function(){
-                    visit_bubble_checkboxes(function(cb, bubble) {
-                        if (! cb.checked)
+                link_action(cell, (which === "popped") ? "delete" : "pop", function () {
+                    visit_bubble_checkboxes(function (cb, bubble) {
+                        if (!cb.checked)
                             return;
                         remove_bubble_row(cb, bubble);
                     });
@@ -1289,17 +1434,17 @@
                     }, "Un-pop checked bubbles.");
                 } else {
                     link_action(cell, "go to", function () {
-                        let ul=null, lr=null;
+                        let ul = null, lr = null;
                         visit_bubble_checkboxes(function (cb, bubble) {
                             if (!cb.checked)
                                 return;
                             const b_ul = [bubble.x - bubble.r, bubble.y - bubble.r];
                             const b_lr = [bubble.x + bubble.r, bubble.y + bubble.r];
-                            if (! ul)
+                            if (!ul)
                                 ul = b_ul;
                             else
                                 ul = [Math.min(ul[0], b_ul[0]), Math.min(ul[1], b_ul[1])]
-                            if (! lr)
+                            if (!lr)
                                 lr = b_lr;
                             else
                                 lr = [Math.max(lr[0], b_lr[0]), Math.max(lr[1], b_lr[1])]
@@ -1314,7 +1459,7 @@
                             if (z > max_zoom)
                                 z = Math.min(max_zoom, 1);
                             // set pan/zoom to focus on selected bubbles
-                            set_pan_zoom((ul[0] + lr[0])/2, (ul[1] + lr[1])/2, z);
+                            set_pan_zoom((ul[0] + lr[0]) / 2, (ul[1] + lr[1]) / 2, z);
                             // hide list dialog
                             dlg_closer();
                         }
@@ -1342,8 +1487,10 @@
                         return isNaN(vf) ? v : vf;
                     }
                     rows.sort(function(a, b){
-                        let v_l = a.querySelector("td:nth-child(" + cell_index + ")").innerText;
-                        let v_r = b.querySelector("td:nth-child(" + cell_index + ")").innerText;
+                        let cell_l = a.querySelector("td:nth-child(" + cell_index + ")");
+                        let cell_r = b.querySelector("td:nth-child(" + cell_index + ")");
+                        let v_l = cell_l.getAttribute("data-sortvalue") || cell_l.innerText;
+                        let v_r = cell_r.getAttribute("data-sortvalue") || cell_r.innerText;
                         let vn_l = to_float(v_l);
                         let vn_r = to_float(v_r);
                         if (typeof(vn_l) != "string"  &&  typeof(vn_r) != "string") {
@@ -1379,15 +1526,35 @@
                         v = new Date(v);
                         const mo = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
                         v = mo[v.getMonth()] + " " + v.getDay() + ", " + v.getHours() + ":" + Math.floor(v.getMinutes()/10) + v.getMinutes()%10;
+                        cell.innerText = v;
+                    } else if (cols[nc] === "color") {
+                        const colorSample = document.createElement("div");
+                        const v2 = color_name_to_rgba(v);
+                        colorSample.setAttribute("title", v);
+                        cell.setAttribute("data-sortvalue", rgb_to_hue(v2));
+                        colorSample.style.border = "solid 2px black";
+                        colorSample.style.borderRadius = "8px";
+                        colorSample.style.display = "inline-block";
+                        colorSample.style.width = colorSample.style.height = "12px";
+                        colorSample.style.borderColor = v;
+                        colorSample.style.backgroundColor = "rgba(" + v2[0] + "," + v2[1] + "," + v2[2] + "," + bubble_opacity + ")";
+                        cell.appendChild(colorSample);
+                        cell.style.textAlign = "center";
+                    } else {
+                        if (typeof(v) == "number"  &&  isFinite(v)) {
+                            v = v.toFixed(1);
+                            cell.style.textAlign = "right";
+                        }
+                        cell.innerText = v;
                     }
-                    if (isFinite(v)) {
-                        v = Math.round(v * 10) / 10;
-                        cell.style.textAlign = "right";
-                    }
-                    cell.innerText = v;
                 }
                 row.appendChild(cell);
             }
+        }
+        if (bubble_list.length === 0) {
+            const empty_msg = document.createElement("tr");
+            empty_msg.innerHTML = "<td class='no-bubbles-in-list' colspan='" + cols.length + "'>-- there are no bubbles in this list --</td>";
+            table.appendChild(empty_msg)
         }
     }
 
@@ -1654,7 +1821,6 @@
             mode = mode.substring(1);
         mode = decodeURI(mode);
         const canvas = document.getElementById("view");
-        // FIXME update this on resize!
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
         the_canvas = canvas;
@@ -1731,6 +1897,9 @@
  TODO...
 
   new coord type: longitude & latitude
+  seek bubble - gravitates toward key words & shows lines
+  track bubble - pan to center on it
+  filter for list view
 
  data gets corrupted when you open the same page in two different browser tabs
    localStorage += tabs={my_random_id: page, ...} - don't allow two tabs to open the same page
