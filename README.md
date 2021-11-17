@@ -1,2 +1,4 @@
-# bubbles
-Floating bubble planning system
+# Bubbles
+
+A way to organize ideas.
+
