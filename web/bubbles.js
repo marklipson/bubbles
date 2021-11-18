@@ -44,6 +44,7 @@
     const grid_styles = [
         "grid",
         "polar",
+        "spherical",
         "no grid"
     ];
     // friction etc.
@@ -60,6 +61,7 @@
     let grid_label_color = "#a0b0e8";
     let space_color = "#80a0c0";
     let bubble_opacity = 0.3;
+    let seek_arrow_color = "#00c000";
     //
     let frame_rate = 40;
     // all bubbles
@@ -69,10 +71,11 @@
     let title = "";
     // start time for previous frame
     let t0 = new Date().getTime();
-    //view
+    // view
     let world_r = 6000;
     let pan = [0, 0];
     let zoom = 1;
+    let track_to = null;
     var mouse_pos = [0, 0];
     var move00 = null, move0 = null, move1 = null;
     let the_canvas = null;
@@ -123,6 +126,8 @@
         target.refs.push(source.uuid);
     }
     function delete_bubble(bubble) {
+        if (track_to === bubble)
+            track_bubble(null);
         for (let nr=0; nr < bubble.refs; nr++) {
             let other = bubble_index[bubble.refs[nr]];
             if (other && other.stick_to && other.stick_to.target === bubble.uuid)
@@ -179,6 +184,7 @@
             delete b.refs;
             delete b.change_size;
             delete b.popping;
+            delete b.seek_forces;
             if (! b.stick_to)
                 delete b.stick_to;
             if (! b.popped_at)
@@ -500,7 +506,6 @@
             this.dragging = false;
             this.selected = false;
             this.change_size = 0;
-            this.popping = 0;
             // fills in 'squish'
             this.restore_surface();
         }
@@ -635,7 +640,7 @@
             }
             // seek targets
             if (this.seek_forces) {
-                ctx.strokeStyle = "green";
+                ctx.strokeStyle = seek_arrow_color;
                 ctx.lineWidth = 2;
                 for (let nb=0; nb < this.seek_forces.length; nb++) {
                     const score = this.seek_forces[nb][0];
@@ -645,15 +650,34 @@
                     let y0 = this.y;
                     let x1 = b.x;
                     let y1 = b.y;
+                    // move (x0, y0) to the edge ot the bubble
                     // move (x1, y1) to the edge of the other bubble
-                    let r_d = b.radius(x0, y0) / Math.sqrt((x1-x0)**2 + (y1-y0)**2);
-                    x1 -= (x1-x0)*r_d;
-                    y1 -= (y1-y0)*r_d;
+                    let r0 = this.radius(x1, y1)
+                    let r1 = b.radius(x0, y0);
+                    let d = Math.sqrt((x1-x0)**2 + (y1-y0)**2);
+                    let r_d0 = r0 / d;
+                    x0 += (x1-x0)*r_d0;
+                    y0 += (y1-y0)*r_d0;
+                    d = Math.sqrt((x1-x0)**2 + (y1-y0)**2);
+                    if (r1 > d)
+                        r1 = d - 0.1;
+                    let r_d1 = r1 / d;
+                    x1 -= (x1-x0)*r_d1;
+                    y1 -= (y1-y0)*r_d1;
+                    d = Math.sqrt((x1-x0)**2 + (y1-y0)**2);
+                    let _x = (x1-x0)/d, _y = (y1-y0)/d;
                     ctx.beginPath();
                     ctx.moveTo(x0, y0);
                     ctx.lineTo(x1, y1);
                     ctx.stroke();
-                    // FIXME draw arrow head
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    const arrow_sz = 15;
+                    ctx.lineTo(x1 + _x*-arrow_sz + _y*-arrow_sz, y1 + _y*-arrow_sz + _x*arrow_sz );
+                    ctx.lineTo(x1 + _x*-arrow_sz + _y*arrow_sz, y1 + _y*-arrow_sz + _x*-arrow_sz );
+                    ctx.closePath();
+                    ctx.fillStyle = seek_arrow_color;
+                    ctx.fill();
                 }
             }
             // trace outline of bubble
@@ -680,16 +704,12 @@
                 ctx.closePath();
             }
             // normal fill
-            if (! this.popping) {
-                ctx.fillStyle = this.color;
-                ctx.globalAlpha = bubble_opacity;
-                ctx.fill()
-                ctx.globalAlpha = 1;
-            }
+            ctx.fillStyle = this.color;
+            ctx.globalAlpha = bubble_opacity;
+            ctx.fill()
+            ctx.globalAlpha = 1;
             // draw border
             ctx.lineWidth = this.wall_width();
-            if (this.popping)
-                ctx.lineWidth = 1;
             ctx.strokeStyle = this.color;
             ctx.stroke();
             // pinned/fixed: show a dashed line inside the border
@@ -700,7 +720,7 @@
                 ctx.stroke();
                 ctx.setLineDash([])
             }
-            if (this.selected && ! this.popping) {
+            if (this.selected) {
                 // show selection
                 const dt = new Date();
                 const t = (dt.getUTCSeconds() * 1000 + dt.getUTCMilliseconds()) / 1000;
@@ -757,13 +777,18 @@
                 ctx.fill();
             }
             // text
-            if (! this.popping) {
+            if (true) {
                 ctx.textAlign = "center";
                 ctx.fillStyle = this.selected ? 'black' : '#404040';
                 let margin = 25;
                 let draw_text = this.text;
                 let lines = draw_text.trim().split("\n");
                 let line_height = 16;
+                line_height = (this.r / 5);
+                if (line_height < 14)
+                    line_height = 14;
+                if (line_height > 60)
+                    line_height = 60;
                 ctx.font = line_height + "px sans-serif";
                 const max_lines = Math.floor((2*this.r - margin) / line_height);
                 if (lines.length > max_lines)
@@ -875,7 +900,7 @@
             let total = 0
             for (var nb=0; nb < bubbles.length; nb++) {
                 const b = bubbles[nb];
-                if (! b.text  ||  b.popping)
+                if (! b.text  ||  b.popping  ||  b === this)
                     continue;
                 let b_words = b.text.toLowerCase().split(/[^a-zA-Z0-9]+/);
                 let score = 0;
@@ -905,12 +930,17 @@
                 let dx = cx - this.x;
                 let dy = cy - this.y;
                 let d = Math.sqrt(dx*dx + dy*dy);
-                const seek_speed = 20;
-                if (d > 10) {
-                    let fx = seek_speed * dt * dx/d;
-                    let fy = seek_speed * dt * dy/d;
-                    add_force(forces, this.uuid, fx, fy);
-                }
+                const seek_speed = 25;
+                let f_seek = seek_speed;
+                if (d < 50)
+                    f_seek /= 2;
+                if (d < 10)
+                    f_seek /= 2;
+                if (d < 5)
+                    f_seek = 0;
+                let fx = f_seek * dt * dx/d;
+                let fy = f_seek * dt * dy/d;
+                add_force(forces, this.uuid, fx, fy);
             }
         }
 
@@ -929,7 +959,7 @@
             if (this.text.startsWith("SEEK:")) {
                 let f0 = forces[this.uuid];
                 if (f0) {
-                    forces[this.uuid] = [f0[0]/2, f0[1]/2];
+                    forces[this.uuid] = [f0[0]/2.5, f0[1]/2.5];
                 }
                 this.seek_force(dt, forces);
             }
@@ -954,7 +984,7 @@
          *                      1 allows no drift whatsoever.
          */
         move(dt, force, friction) {
-            if (this.dragging  ||  this.fixed  ||  this.popping)
+            if (this.dragging  ||  this.fixed)
                 force = [0, 0];
             // the 'paper' prevents any force below a certain level
             // TODO combine fx+fy properly into a vector and use its length - the calculation below is 'square'
@@ -992,12 +1022,6 @@
                     this.r = max_bubble_r;
                 this.r2 = this.r ** 2;
                 this.change_size -= amt;
-            }
-            if (this.popping) {
-                const expand = 0.3 ** dt;
-                this.r *= expand;
-                this.r2 = this.r ** 2;
-                this.popping *= expand;
             }
         }
     }
@@ -1070,6 +1094,38 @@
                 ctx.fillText(a.toString(),0, 0);
                 ctx.restore();
             }
+        } else if (show_grid === "spherical") {
+            ctx.strokeStyle = grid_color;
+            ctx.fillStyle = grid_label_color;
+            ctx.textAlign = "left";
+            ctx.font = "18px sans-serif";
+            // latitudes
+            for (let a=-80; a <= 80; a += 10) {
+                ctx.lineWidth = (a % 30 === 0) ? 6 : 4;
+                let alpha = a * Math.PI / 180;
+                let y = Math.sin(alpha) * world_r;
+                let x = Math.cos(alpha) * world_r;
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                ctx.lineTo(-x, y);
+                ctx.stroke();
+            }
+            // longitudes
+            for (let b=-90; b <= 90; b += 10) {
+                ctx.lineWidth = (b % 30 === 0) ? 6 : 4;
+                let beta = b * Math.PI / 180;
+                ctx.beginPath();
+                for (let a=-90; a <= 90; a += 5) {
+                    let alpha = a * Math.PI / 180;
+                    let y = Math.sin(alpha) * world_r;
+                    let x = Math.sin(beta)*Math.cos(alpha) * world_r;
+                    if (a === -90)
+                        ctx.moveTo(x, y);
+                    else
+                        ctx.lineTo(-x, y);
+                }
+                ctx.stroke();
+            }
         }
         // cross-hairs in middle
         ctx.fillStyle = "darkgray";
@@ -1081,24 +1137,34 @@
      * Animate popping of a bubble, then delete the bubble.
      */
     function pop_bubble(bubble) {
-        if (bubble.popping  ||  bubble.popped_at)
+        if (bubble.popped_at)
             return;
         if (bubble.selected);
             select_bubble(null);
         const ctx = the_context;
         let parts = [];
         const squishlen = bubble.squish.length;
-        const avglen = 6.283 * bubble.r * 5 / squishlen;
         bubble.popped_at = new Date().getTime();
         if (save_popped  &&  bubble.text)
             popped.push(bubble.clone());
-        bubble.popping = 1;
-        for (let nr=0; nr < squishlen; nr+=5) {
+        let step = 5;
+        if (bubble.r > 100)
+            step = 3;
+        if (bubble.r > 200)
+            step = 2;
+        const avglen = 6.283 * bubble.r * step / squishlen / 2;
+        for (let nr=0; nr < squishlen; nr+=step) {
             const a = nr*6.283/squishlen;
             const c = bubble.polar(a, bubble.squish[nr]);
-            parts.push({x: c[0], y: c[1], a: a + 1.57, vx: 12*Math.cos(a) + 5*Math.random(), vy: 12*Math.sin(a) + 5*Math.random(), da: Math.random()-0.5, len: avglen + Math.random()*avglen*0.7})
+            parts.push({
+                x: c[0], y: c[1],
+                a: a + 1.57,
+                vx: 10*Math.cos(a) + 6*(Math.random() - 0.5), vy: 10*Math.sin(a) + 6*(Math.random() - 0.5),
+                da: (Math.random()-0.5)*0.6,
+                len: avglen + (Math.random() - 0.5)*avglen*0.8
+            })
         }
-        let n_frames = 20;
+        let n_frames = 30;
         let frame = 0;
         function pop_frame(dt) {
             ctx.beginPath();
@@ -1109,7 +1175,7 @@
                 const dx = Math.cos(part.a) * part.len;
                 const dy = Math.sin(part.a) * part.len;
                 ctx.moveTo(part.x+dx, part.y+dy);
-                ctx.lineTo(part.x-dy, part.y-dy);
+                ctx.lineTo(part.x-dx, part.y-dy);
                 part.x += part.vx;
                 part.y += part.vy;
                 part.a += part.da;
@@ -1119,12 +1185,12 @@
             ctx.globalAlpha = 1
             frame ++;
             if (frame >= n_frames) {
-                delete_bubble(bubble);
                 return true;
             }
             return false;
         }
         animators.push(pop_frame);
+        delete_bubble(bubble);
     }
 
     /**
@@ -1163,6 +1229,23 @@
                 f = [0, 0];
             bubbles[nb].move(dt, f, friction);
             bubbles[nb].draw(ctx);
+        }
+        // track-to
+        if (track_to &&  ! track_to.popping) {
+            let dx = track_to.x - pan[0];
+            let dy = track_to.y - pan[1];
+            let z = 0.96 * dt;
+            set_pan_zoom(pan[0] + dx * z, pan[1] + dy * z);
+            /*
+            // indicator of tracking
+            let state = (new Date().getTime() % 2500)  < 1250;
+            let x = pan[0] - the_canvas.width/2/zoom;
+            let y = pan[1] + the_canvas.height/2/zoom;
+            ctx.fillStyle = "green";
+            ctx.textAlign = "center";
+            ctx.font = "20px sans-serif";
+            ctx.fillText(state ? "TRACKING" : "tracking", x + 65, y - 20);
+            */
         }
         // additional animations
         let remove_anims = [];
@@ -1216,6 +1299,17 @@
             edit_text.addEventListener("input", function() {
                 bubble.text = edit_text.value;
             })
+            edit_text.addEventListener("focus", function(evt){
+                edit_text.style.backgroundColor = "yellow";
+                let cycle = 0;
+                function flash() {
+                    edit_text.style.backgroundColor = (cycle % 2 === 0) ? "yellow" : "";
+                    cycle ++;
+                    if (cycle <= 5)
+                        setTimeout(flash, 250);
+                }
+                flash();
+            });
             area.appendChild(edit_text);
             area.appendChild(document.createElement("br"));
             // color
@@ -1328,12 +1422,42 @@
                 pop_bubble(bubble);
             });
             area.appendChild(btn_pop);
+            // track
+            const btn_track = document.createElement("button");
+            btn_track.setAttribute("title", "Track this bubble.");
+            btn_track.innerText = (bubble === track_to) ? "TRACKING" : "track";
+            btn_track.addEventListener("click", function() {
+                if (btn_track.innerText === "track") {
+                    track_bubble(bubble);
+                    btn_track.innerText = "TRACKING"
+                } else {
+                    track_bubble(null);
+                    btn_track.innerText = "track"
+                }
+            });
+            area.appendChild(btn_track);
             //
             if (bubble.selected) {
                 setTimeout(refresh, 60000);
             }
         }
         refresh();
+    }
+
+    /**
+     * Track/untrack a bubble.
+     */
+    function track_bubble(bubble) {
+        const show_btn = document.getElementById("show-track-btn");
+        const btn = document.getElementById("track");
+        if (bubble) {
+            show_btn.style.display = "block";
+            btn.innerText = "TRACKING"
+        } else {
+            show_btn.style.display = "none";
+            btn.innerText = "track"
+        }
+        track_to = bubble;
     }
 
     /**
@@ -1665,6 +1789,11 @@
             show_grid = grid_styles[n_style];
             evt.target.innerText = show_grid;
         });
+        // un-track
+        const btn_track = document.getElementById("track");
+        btn_track.addEventListener("click", function() {
+            track_bubble(null);
+        });
         //
         function to_ctx_coords(evt) {
             const w = the_canvas.width;
@@ -1849,6 +1978,16 @@
             link.setAttribute("target", "_blank");
             link.click();
         });
+        document.getElementById("search").addEventListener("click", function(evt){
+            //const c = r_colors[Math.floor(Math.random()*r_colors.length)];
+            const bubble = new Bubble(pan[0], pan[1], 50, "green");
+            bubble.text = "SEEK: ";
+            track_bubble(bubble);
+            bubbles.push(bubble);
+            // focus on it
+            select_bubble(bubble);
+            document.getElementById("bubble_text_editor").focus();
+        });
         document.getElementById("friction-etc").addEventListener("click", function(evt){
             // click through presets
             for (let n=0; n < physics_presets.length; n++) {
@@ -1896,20 +2035,16 @@
 /*
  TODO...
 
-  new coord type: longitude & latitude
-  seek bubble - gravitates toward key words & shows lines
-  track bubble - pan to center on it
-  filter for list view
+  throw bubble when zoomed out
 
- data gets corrupted when you open the same page in two different browser tabs
-   localStorage += tabs={my_random_id: page, ...} - don't allow two tabs to open the same page
- bulk 'rectangle' select - Shift+drag - move/pop/etc a group of bubbles
- search for bubble by name
+  data gets corrupted when you open the same page in two different browser tabs
+    localStorage += tabs={my_random_id: page, ...} - don't allow two tabs to open the same page
 
- hover to see details
- wrap text to bubble?
- JIRA link per bubble
+  bulk 'rectangle' select - Shift+drag - move/pop/etc a group of bubbles
 
- instructions
- demo mode
+  hover to see details
+  wrap text to bubble?
+
+  instructions
+  demo mode
  */
