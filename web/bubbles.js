@@ -72,6 +72,7 @@
     // start time for previous frame
     let t0 = new Date().getTime();
     // view
+    let zappo = null;
     let world_r = 6000;
     let pan = [0, 0];
     let zoom = 1;
@@ -83,6 +84,10 @@
     let capture_bubble_click = null;
     let bubble_index = {};
     let animators = [];
+    //
+    function random_color() {
+        return r_colors[Math.floor(Math.random()*r_colors.length)];
+    }
     //
     const _color_values = {};
     function color_name_to_rgba(name) {
@@ -192,8 +197,12 @@
             return b;
         }
         let out = [];
-        for (let n=0; n < bubbles.length; n++)
-            out.push(reduce(bubbles[n]));
+        for (let n=0; n < bubbles.length; n++) {
+            const b = bubbles[n];
+            if (b.zappo)
+                continue
+            out.push(reduce(b));
+        }
         let out_p = [];
         for (let n=0; n < popped.length; n++)
             out_p.push(reduce(popped[n]));
@@ -506,6 +515,7 @@
             this.dragging = false;
             this.selected = false;
             this.change_size = 0;
+            this.zappo = null;
             // fills in 'squish'
             this.restore_surface();
         }
@@ -604,11 +614,33 @@
         }
 
         /**
+         * Point inside bubble.
+         */
+        inside(x, y) {
+            let dx = Math.abs(x - this.x);
+            if (dx > this.r)
+                return false;
+            let dy = Math.abs(y - this.y);
+            if (dy > this.r)
+                return false;
+            let d2 = dx*dx + dy*dy;
+            if (d2 > this.r2)
+                return false;
+            if (Math.sqrt(d2) < this.radius(x, y))
+                return true;
+        }
+
+        /**
          * Draw this bubble.
          */
         draw(ctx) {
+            if (this.zappo) {
+                this.draw_zappo(ctx);
+                this.draw_selection(ctx);
+                return;
+            }
             const r = this.r - bubble_outer_margin;
-            // indicator of bubble selection
+            // stick-to target selection
             const is_click_source = capture_bubble_click  &&  capture_bubble_click.source === this;
             const is_stuck_to = this.stick_to && bubble_index[this.stick_to.target];
             if (is_click_source || is_stuck_to) {
@@ -720,45 +752,7 @@
                 ctx.stroke();
                 ctx.setLineDash([])
             }
-            if (this.selected) {
-                // show selection
-                const dt = new Date();
-                const t = (dt.getUTCSeconds() * 1000 + dt.getUTCMilliseconds()) / 1000;
-                const xr = Math.sin((t % 2.0)/(2.0/6.283)) * 5;
-                const spin = (t % 1000000)/10;
-                ctx.fillStyle = sel_color;
-                ctx.globalAlpha = 0.5;
-                ctx.beginPath();
-                ctx.lineWidth = 10/zoom;
-                ctx.strokeStyle = sel_color;
-                ctx.arc(this.x, this.y, (50 + xr)/zoom, 0, 6.283);
-                ctx.stroke()
-                ctx.globalAlpha = 1;
-                /*
-                // crosshairs
-                ctx.beginPath();
-                ctx.strokeStyle = "red";
-                ctx.lineWidth = 4 / zoom;
-                for (let a=0; a < 6.283; a += 1.5707) {
-                    ctx.beginPath();
-                    let p1 = this.polar(a, (25 + xr)/zoom);
-                    let p2 = this.polar(a, (50 + xr)/zoom);
-                    ctx.moveTo(p1[0], p1[1]);
-                    ctx.lineTo(p2[0], p2[1]);
-                    ctx.stroke();
-                }
-                */
-                ctx.strokeStyle = "gray";
-                ctx.lineWidth = 1 / zoom;
-                for (let a=0; a < 6.283; a += 0.15707) {
-                    ctx.beginPath();
-                    let p1 = this.polar(a+spin, (60)/zoom);
-                    let p2 = this.polar(a+spin, (67)/zoom);
-                    ctx.moveTo(p1[0], p1[1]);
-                    ctx.lineTo(p2[0], p2[1]);
-                    ctx.stroke();
-                }
-            }
+            this.draw_selection(ctx);
             // pointer toward stuck-to bubble
             if (this.stick_to  &&  bubble_index[this.stick_to.target]) {
                 const color = bubble_index[this.stick_to.target].color;
@@ -804,6 +798,71 @@
                     ctx.fillText(line, this.x, this.y - by);
                     by -= line_height;
                 }
+            }
+        }
+
+        /**
+         * Draw selection graphics.
+         */
+        draw_selection(ctx) {
+            if (! this.selected)
+                return;
+            const dt = new Date();
+            const t = (dt.getUTCSeconds() * 1000 + dt.getUTCMilliseconds()) / 1000;
+            const xr = Math.sin((t % 2.0)/(2.0/6.283)) * 5;
+            const spin = (t % 1000000)/10;
+            ctx.fillStyle = sel_color;
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath();
+            ctx.lineWidth = 10/zoom;
+            ctx.strokeStyle = sel_color;
+            ctx.arc(this.x, this.y, (50 + xr)/zoom, 0, 6.283);
+            ctx.stroke()
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = "gray";
+            ctx.lineWidth = 1 / zoom;
+            for (let a=0; a < 6.283; a += 0.15707) {
+                ctx.beginPath();
+                let p1 = this.polar(a+spin, (60)/zoom);
+                let p2 = this.polar(a+spin, (67)/zoom);
+                ctx.moveTo(p1[0], p1[1]);
+                ctx.lineTo(p2[0], p2[1]);
+                ctx.stroke();
+            }
+        }
+
+        draw_zappo(ctx) {
+            // TODO how about a subclass?
+            const z = this.zappo;
+            ctx.lineWidth = 4;
+            ctx.beginPath()
+            const pts = [[0, 1], [30, 0.6], [135, 1], [180, 0.5], [-135, 1], [-30, 0.6]];
+            for (let n=0; n < pts.length; n++) {
+                let pt = pts[n];
+                let p = this.polar(z.a + pt[0]*Math.PI/180, pt[1] * this.r);
+                if (n === 0)
+                    ctx.moveTo(p[0], p[1]);
+                else
+                    ctx.lineTo(p[0], p[1]);
+            }
+            ctx.closePath();
+            ctx.strokeStyle = this.color;
+            ctx.lineJoin = "round";
+            ctx.stroke();
+            ctx.fillStyle = this.color;
+            ctx.globalAlpha = bubble_opacity;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            // missles
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = "red";
+            ctx.lineCap = "butt";
+            for (let n=0; n < this.zappo.missles.length; n++) {
+                let m = this.zappo.missles[n];
+                ctx.beginPath();
+                ctx.moveTo(m.x, m.y);
+                ctx.lineTo(m.x + m.dx, m.y + m.dy);
+                ctx.stroke();
             }
         }
 
@@ -953,6 +1012,20 @@
          *   - we call force(), which calls poke(), which deforms bubbles based on 'incursion'
          */
         compute_forces(dt, forces) {
+            if (this.zappo) {
+                const a = this.zappo.a;
+                if (this.zappo.thrust) {
+                    const f = 80 * dt * this.zappo.thrust;
+                    add_force(forces, this.uuid, f * Math.cos(a), f * Math.sin(a));
+                }
+                this.text = "" + this.zappo.thrust;
+                if (this.zappo.turn) {
+                    const da = dt * 1 * this.zappo.turn;
+                    this.zappo.a += da;
+                }
+                // should zappos be immune to gravity & such?
+                //return;
+            }
             this.restore_surface();
             for (var nb=0; nb < bubbles.length; nb++)
                 this.force(dt, bubbles[nb], forces);
@@ -982,8 +1055,10 @@
          * @param force         Amount of force being applied.
          * @param friction      Surface friction value which takes 'dt' into account--0 is like floating in space,
          *                      1 allows no drift whatsoever.
+         * @param popped        If a bubble needs to be popped for some reason, i.e. if it bumps into something sharp,
+         *                      expires, or is struck by something, add it to this list to schedule for popping.
          */
-        move(dt, force, friction) {
+        move(dt, force, friction, popped) {
             if (this.dragging  ||  this.fixed)
                 force = [0, 0];
             // the 'paper' prevents any force below a certain level
@@ -1023,6 +1098,24 @@
                 this.r2 = this.r ** 2;
                 this.change_size -= amt;
             }
+            //
+            if (this.zappo) {
+                let missles = this.zappo.missles;
+                for (let n = 0; n < missles.length; n++) {
+                    let m = missles[n];
+                    m.x += m.vx * dt;
+                    m.y += m.vy * dt;
+                    m.t += dt;
+                    for (let nb=0; nb < bubbles.length; nb++)
+                        if (bubbles[nb] !== this  &&  bubbles[nb].inside(m.x, m.y)) {
+                            popped.push(bubbles[nb]);
+                            m.t = 999;
+                        }
+                }
+                while (missles.length  &&  missles[0].t > 3) {
+                    missles.splice(0, 1);
+                }
+            }
         }
     }
 
@@ -1058,10 +1151,14 @@
             const gx0 = x0 - x0 % grid_size;
             const gy0 = y0 - y0 % grid_size;
             ctx.fillStyle = grid_color;
-            for (let ny = 0; ny < n_y; ny++)
-                ctx.fillRect(x0, gy0 + ny * grid_size, w, 1);
-            for (let nx = 0; nx < n_x; nx++)
-                ctx.fillRect(gx0 + nx * grid_size, y0, 1, h);
+            for (let ny = 0; ny < n_y; ny++) {
+                const thk = ((gy0 + ny * grid_size) % 1000 === 0) ? 3 : 1
+                ctx.fillRect(x0, gy0 + ny * grid_size, w, thk);
+            }
+            for (let nx = 0; nx < n_x; nx++) {
+                const thk = ((gx0 + nx * grid_size) % 1000 === 0) ? 3 : 1
+                ctx.fillRect(gx0 + nx * grid_size, y0, thk, h);
+            }
         } else if (show_grid === "polar") {
             ctx.strokeStyle = grid_color;
             ctx.fillStyle = grid_label_color;
@@ -1128,9 +1225,11 @@
             }
         }
         // cross-hairs in middle
+        const ch_sz = (show_grid === "polar") ? 200 : 100;
+        const ch_w = (show_grid === "polar") ? 3 : 2;
         ctx.fillStyle = "darkgray";
-        ctx.fillRect(-100, -1, 200, 3);
-        ctx.fillRect(-1, -100, 3, 200);
+        ctx.fillRect(-ch_sz/2, -ch_w/2, ch_sz, ch_w);
+        ctx.fillRect(-ch_w/2, -ch_sz/2, ch_w, ch_sz);
     }
 
     /**
@@ -1223,18 +1322,23 @@
         for (let nb=0; nb < bubbles.length; nb++){
             bubbles[nb].compute_forces(dt, forces);
         }
+        let popped = [];
         for (let nb=0; nb < bubbles.length; nb++){
             let f = forces[bubbles[nb].uuid];
             if (! f)
                 f = [0, 0];
-            bubbles[nb].move(dt, f, friction);
+            bubbles[nb].move(dt, f, friction, popped);
             bubbles[nb].draw(ctx);
         }
+        // pop bubbles listed by move()
+        for (let np=0; np < popped.length; np++) {
+            pop_bubble(popped[np]);
+        }
         // track-to
-        if (track_to &&  ! track_to.popping) {
+        if (track_to) {
             let dx = track_to.x - pan[0];
             let dy = track_to.y - pan[1];
-            let z = 0.96 * dt;
+            let z = 0.97 * dt;
             set_pan_zoom(pan[0] + dx * z, pan[1] + dy * z);
             /*
             // indicator of tracking
@@ -1801,7 +1905,7 @@
             return [(evt.offsetX - w/2)/zoom + pan[0], (evt.offsetY - h/2)/zoom + pan[1]];
         }
         function create_bubble(at) {
-            const c = r_colors[Math.floor(Math.random()*r_colors.length)];
+            const c = random_color();
             const bubble = new Bubble(at[0], at[1], 50, c);
             add_bubble(bubble);
             select_bubble(bubble);
@@ -1875,11 +1979,6 @@
                 set_pan_zoom(pan0[0] - dx/zoom, pan0[1] - dy/zoom);
             }
         });
-        // TODO I saw something on fredmeyer.com using two-finger scroll so it must be possible
-        //   - but this isn't working
-        //canvas.addEventListener("touchmove", function(evt) {
-        //    console.log(evt);
-        //});
     }
 
     /**
@@ -1908,7 +2007,7 @@
         var px = Math.random()*900 - 450;
         var py = Math.random()*900 - 450;
         var r = Math.random()*80 + 20;
-        var c = r_colors[Math.floor(Math.random()*r_colors.length)];
+        var c = random_color();
         add_bubble(new Bubble(px, py, r, c, ''));
     }
 
@@ -1939,6 +2038,71 @@
                 reader.readAsText(file);
             }
         });
+    }
+
+    /**
+     * Turn the zappo blaster on or off.
+     */
+    function zappo_mode(on) {
+        if (on) {
+            if (zappo)
+                return;
+            zappo = new Bubble(pan[0], pan[1], 70, random_color(), "");
+            zappo.weight = 0.2;
+            zappo.zappo = {
+                a: -Math.PI/2,
+                thrust: 0,
+                turn: 0,
+                missles: []
+            }
+            bubbles.push(zappo);
+            track_to = zappo;
+            document.addEventListener("keydown", zappo_keys);
+            document.addEventListener("keyup", zappo_keys);
+        } else {
+            if (! zappo)
+                return;
+            const n = bubbles.indexOf(zappo);
+            if (n >= 0)
+                bubbles.splice(n);
+            zappo = null;
+            document.removeEventListener("keydown", zappo_keys);
+            document.removeEventListener("keyup", zappo_keys);
+        }
+    }
+
+    /**
+     * Handle key events for the zappo blaster.
+     */
+    function zappo_keys(evt) {
+        if (! zappo)
+            return;
+        const on = evt.type === "keydown";
+        if (evt.code === "KeyW"  ||  evt.code === "ArrowUp") {
+            zappo.zappo.thrust = on ? 1 : 0;
+        } else if (evt.code === "KeyA"  ||  evt.code === "ArrowLeft") {
+            zappo.zappo.turn = on ? -1 : 0;
+        } else if (evt.code === "KeyS"  ||  evt.code === "ArrowDown") {
+            zappo.zappo.thrust = on ? -1 : 0;
+        } else if (evt.code === "KeyD"  ||  evt.code === "ArrowRight") {
+            zappo.zappo.turn = on ? 1 : 0;
+        } else if (evt.code === "Space"  &&  on) {
+            let dx = Math.cos(zappo.zappo.a);
+            let dy = Math.sin(zappo.zappo.a);
+            let x = zappo.x + dx * zappo.r;
+            let y = zappo.y + dy * zappo.r;
+            zappo.zappo.missles.push({
+                x: x,
+                y: y,
+                dx: dx * 10,
+                dy: dy * 10,
+                vx: dx * 160,
+                vy: dy * 160,
+                t: 0
+            });
+        }
+        evt.stopPropagation();
+        evt.preventDefault();
     }
 
     /**
@@ -1979,7 +2143,6 @@
             link.click();
         });
         document.getElementById("search").addEventListener("click", function(evt){
-            //const c = r_colors[Math.floor(Math.random()*r_colors.length)];
             const bubble = new Bubble(pan[0], pan[1], 50, "green");
             bubble.text = "SEEK: ";
             track_bubble(bubble);
@@ -2000,6 +2163,14 @@
                     break;
                 }
             }
+        });
+        const btn_zappo = document.getElementById("zappo");
+        btn_zappo.addEventListener("click", function() {
+            let on = btn_zappo.innerText === "ZAPPO";
+            on = ! on;
+            btn_zappo.innerText = on ? "ZAPPO" : "zappo";
+            btn_zappo.style.backgroundColor = on ? "yellow" : "";
+            zappo_mode(on);
         });
         file_drop(the_canvas);
         if (mode === "_demo_") {
@@ -2035,7 +2206,7 @@
 /*
  TODO...
 
-  throw bubble when zoomed out
+  hard to throw bubble when zoomed out
 
   data gets corrupted when you open the same page in two different browser tabs
     localStorage += tabs={my_random_id: page, ...} - don't allow two tabs to open the same page
@@ -2045,6 +2216,6 @@
   hover to see details
   wrap text to bubble?
 
-  instructions
+  scroll gestures
   demo mode
  */
