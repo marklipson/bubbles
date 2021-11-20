@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Bubbles</title>
+    <script src="utils.js"></script>
     <script src="bubbles.js"></script>
     <style>
         body {
@@ -22,7 +23,7 @@
             opacity: 0.7;
             border: solid 3px #c0c060;
             background-color: #ffff80;
-            color: #808040;
+            color: #606030;
             padding: 12px;
             border-radius: 16px;
         }
@@ -30,12 +31,21 @@
             font-weight: bold;
             margin-bottom: 6px;
         }
+        #panel .edit-value-label {
+            display: inline-block;
+            width: 100px;
+            text-align: center;
+        }
         #panel textarea {
             height: 55px;
             width: calc(16px * 27);
         }
         #panel input {
             width: 70px;
+            margin-right: 3px;
+        }
+        #panel button {
+            margin-right: 3px;
         }
         #toolbar {
             top: 0;

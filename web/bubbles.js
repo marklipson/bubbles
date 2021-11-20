@@ -1,4 +1,10 @@
+/**
+ * BUBBLES.
+ *
+ * Requires utils.js.
+ */
 (function(){
+    // VARIOUS (mostly) PHYSICS SETTINGS & ADJUSTMENTS
     // how hard bubbles push one another away when touching
     let bounce = 0.7;
     // how hard bubbles push one another away when close
@@ -22,8 +28,7 @@
     // zoom range
     let min_zoom = 0.08;
     let max_zoom = 9;
-    // show grid
-    let show_grid = "grid";
+
     // available colors
     const r_colors = [
         "black", "gray",
@@ -53,83 +58,79 @@
         {name: "friction: med", v_friction: 0.3, bg_friction: 0.4, inertia: 0.3, spring_force: 15, spring_damping: 0.4, bounce: 0.7},
         {name: "friction: high", v_friction: 0.1, bg_friction: 0.7, inertia: 0.2, spring_force: 20, spring_damping: 0.3, bounce: 0.7}
     ];
-    /////////
-    // colors
+
+    // COLORS
     let sel_color = "rgba(255,255,128,128)";  // "#ffff80";
     let bg_color = "#e0e0e0";
     let grid_color = "#c0d0ff";
     let grid_label_color = "#a0b0e8";
     let space_color = "#80a0c0";
-    let bubble_opacity = 0.3;
     let seek_arrow_color = "#00c000";
-    //
-    let frame_rate = 40;
-    // all bubbles
+    let bubble_opacity = 0.3;
+
+    // MAIN DATA
+    // all the bubbles
     let bubbles = [];
+    // - index of bubbles by UUID (use add_bubble() & delete_bubble())
+    let bubble_index = {};
+    // popped bubbles
     let popped = [];
-    let save_popped = true;
+    // title of current page
     let title = "";
-    // start time for previous frame
+
+    // VIEW STUFF
+    // - delay between frames
+    let frame_rate = 40;
+    // - start time for previous frame
     let t0 = new Date().getTime();
-    // view
+    // - selected grid style
+    let show_grid = "grid";
+    // - whether to save any bubbles
+    let save_popped = true;
+    // - player-controlled 'ship'
     let zappo = null;
+    // - radius of navigable world
     let world_r = 6000;
+    // - current pan & zoom
     let pan = [0, 0];
     let zoom = 1;
+    // - keep this bubble centered
     let track_to = null;
+    // - mouse metrics
     var mouse_pos = [0, 0];
     var move00 = null, move0 = null, move1 = null;
+    // - for detecting clicks related to a bubble, i.e. for stick-to
+    let capture_bubble_click = null;
+    // - additional plugged-in animations (see frame())
+    let animators = [];
+    // - canvas & context
     let the_canvas = null;
     let the_context = null;
-    let capture_bubble_click = null;
-    let bubble_index = {};
-    let animators = [];
+
     //
     function random_color() {
         return r_colors[Math.floor(Math.random()*r_colors.length)];
     }
-    //
-    const _color_values = {};
-    function color_name_to_rgba(name) {
-        if (! _color_values[name]) {
-            var canvas = document.createElement('canvas');
-            var context = canvas.getContext('2d');
-            context.fillStyle = name;
-            context.fillRect(0, 0, 1, 1);
-            _color_values[name] = context.getImageData(0, 0, 1, 1).data;
-        }
-        return _color_values[name];
+
+    /**
+     * Remove all bubbles (does not clear the popped bubble list).
+     */
+    function clear() {
+        bubbles = []
+        bubble_index = {}
     }
-    function rgb_to_hue(rgb) {
-        const r = rgb[0] / 255;
-        const g = rgb[1] / 255;
-        const b = rgb[2] / 255;
-        const mx = Math.max(r, g, b);
-        const mn = Math.min(r, g, b);
-        // place grays after colors
-        if (Math.abs(mx - mn) < 0.05)
-            return 6 + Math.sqrt(r*r + g*g + b*b);
-        // colors with a discernible hue
-        let hue = 0;
-        if (r === mx)
-            hue = (g - b) / (mx - mn);
-        else if (g === mx)
-            hue = 2 + (b - r) / (mx - mn);
-        else
-            hue = 4 + (r - g) / (mx - mn);
-        if (hue < 0)
-            hue += 6;
-        return hue;
-    }
-    //
+
+    /**
+     * Add a new bubble to the world.
+     */
     function add_bubble(bubble) {
         bubbles.push(bubble);
         bubble_index[bubble.uuid] = bubble;
     }
-    function stick_bubbles(source, target, length=50) {
-        source.stick_to = {target: target.uuid, length: length};
-        target.refs.push(source.uuid);
-    }
+
+    /**
+     * Delete a bubble from the world.
+     */
     function delete_bubble(bubble) {
         if (track_to === bubble)
             track_bubble(null);
@@ -142,6 +143,7 @@
         delete bubble_index[bubble.uuid];
         return bubbles.splice(nb, 1);
     }
+
     // load/save
     function all_saves() {
         const data = localStorage.getItem("saves");
@@ -224,10 +226,6 @@
             upd_saves(all);
         }
     }
-    function clear() {
-        bubbles = []
-        bubble_index = {}
-    }
     function load(name="") {
         name = name || "default";
         if (name === title)
@@ -299,10 +297,9 @@
         save_sel.value = title;
     }
     //
-    function make_uuid() {
-        if (typeof(crypto) != "undefined"  &&  typeof(crypto.randomUUID) != "undefined")
-            return crypto.randomUUID();
-        return Math.floor(Math.random()*2000000000).toString(36);
+    function stick_bubbles(source, target, length=50) {
+        source.stick_to = {target: target.uuid, length: length};
+        target.refs.push(source.uuid);
     }
     //
     function set_pan_zoom(px, py, z=0) {
@@ -325,154 +322,6 @@
             return [px, py];
         const f = r / Math.sqrt(d2);
         return [px * f, py * f];
-    }
-    /**
-     * Click-and-hold adapter for buttons.  Calls first(), then repeatedly calls every() while clicked, then last().
-     * @param button        Button to watch.
-     * @param first         Called when clicked down.
-     * @param every         Called while being held down.
-     * @param last          Called when unclicked.
-     * @param delay         Delay between calls while held down.
-     */
-    function button_hold_events(button, first, every, last, delay=250) {
-        let t_click = null;
-        let tmr_every = null;
-        let running = false;
-        function on_every() {
-            if (! running)
-                return;
-            const t_now = new Date().getTime() - t_click;
-            if (t_now > 15000)
-                stop();
-            every();
-            tmr_every = setTimeout(on_every, delay);
-        }
-        function start() {
-            running = true;
-            t_click = new Date().getTime();
-            if (every)
-                tmr_every = setTimeout(on_every, delay);
-            if (first)
-                first();
-        }
-        function stop() {
-            if (! running)
-                return;
-            running = false;
-            clearTimeout(tmr_every);
-            if (last)
-                last();
-        }
-        button.addEventListener("mousedown", start);
-        button.addEventListener("mouseup", stop);
-        button.addEventListener("mouseout", stop);
-        button.addEventListener("blur", stop);
-    }
-    /**
-     * Do something every interval while button is clicked.
-     */
-    function button_repeater(button, fn, delay) {
-        return button_hold_events(button, fn, fn, null, delay);
-    }
-
-    /**
-     * Logarithmically adjust a value.
-     */
-    function edit_value(name, getter, setter, area, vmin, vmax) {
-        const edit = document.createElement("input");
-        edit.setAttribute("type", "number");
-        function set_v(vw) {
-            vw = Math.min(vw, vmax);
-            vw = Math.max(vw, vmin);
-            vw = Math.round(vw*100)/100;
-            setter(vw);
-            edit.value = vw.toFixed(2);
-        }
-        edit.addEventListener("change", function() {
-            set_v(parseFloat(edit_weight.value));
-        })
-        set_v(getter());
-        const btn_up = document.createElement("button");
-        btn_up.setAttribute("title", "Increase " + name);
-        btn_up.innerText = "+"
-        btn_up.addEventListener("click", function() {
-            if (vmin <= 0)
-                set_v(getter() + 1);
-            else
-                set_v(getter() * 1.2);
-        });
-        const btn_down = document.createElement("button");
-        btn_down.setAttribute("title", "Decrease " + name);
-        btn_down.innerText = "-"
-        btn_down.addEventListener("click", function() {
-            if (vmin <= 0)
-                set_v(getter() - 1);
-            else
-                set_v(getter() / 1.2);
-        });
-        const lbl = document.createElement("span");
-        lbl.innerText = name + ": ";
-        area.appendChild(lbl);
-        area.appendChild(btn_down);
-        area.appendChild(edit);
-        area.appendChild(btn_up);
-    }
-
-    /**
-     * Choose color.
-     */
-    function choose_color(getter, setter, area) {
-        const boxes = [];
-        function upd(c) {
-            setter(c);
-            for (var n=0; n < boxes.length; n++) {
-                if (boxes[n].getAttribute("data-color") === c) {
-                    //boxes[n].style.borderColor = "black";
-                    boxes[n].style.boxShadow = "#404040 0px 3px 0px";
-                } else {
-                    //boxes[n].style.borderColor = "rgba(0,0,0,0)";
-                    boxes[n].style.boxShadow = "";
-                }
-            }
-        }
-        for (var n=0; n < r_colors.length; n++) {
-            const box = document.createElement("span");
-            box.innerText = "\u00a0";
-            box.style.display = "inline-block";
-            box.style.cursor = "pointer";
-            box.style.width = "16px";
-            box.style.height = "16px";
-            box.style.marginBottom = "6px";
-            //box.style.border = "solid 2px 2px 0 2px rgba(0,0,0,0)";
-            box.style.backgroundColor = r_colors[n];
-            box.setAttribute("data-color", r_colors[n]);
-            box.addEventListener("click", function(evt){
-                const c = evt.target.getAttribute("data-color");
-                upd(c);
-            });
-            boxes.push(box);
-            area.appendChild(box);
-        }
-        upd(getter());
-    }
-    function surface_tension(surface, fuzz) {
-        let i = surface;
-        let o = i;
-        for (var n_fuzz=0; n_fuzz < fuzz; n_fuzz++) {
-            o = []
-            const ff = [[-2, 0.1], [-1, 0.25], [0, 0.3], [1, 0.25], [2, 0.1]];
-            for (var n = 0; n < i.length; n++) {
-                let v = 0;
-                for (var nf = 0; nf < ff.length; nf++) {
-                    const f0 = ff[nf][0];
-                    const f1 = ff[nf][1];
-                    v += i[(n + f0 + i.length) % i.length] * f1;
-                }
-                o.push(v);
-            }
-            i = o;
-        }
-        return o;
     }
 
     /**
@@ -834,6 +683,25 @@
         draw_zappo(ctx) {
             // TODO how about a subclass?
             const z = this.zappo;
+            // thrust
+            if (z.thrust !== 0) {
+                let p0 = this.polar(z.a + 180*Math.PI/180, this.r * 0.5);
+                let p1 = this.polar(z.a + 135*Math.PI/180, this.r * 1);
+                let p2 = this.polar(z.a + -135*Math.PI/180, this.r * 1);
+                ctx.beginPath();
+                ctx.moveTo(p2[0], p2[1]);
+                ctx.lineTo(p0[0], p0[1]);
+                ctx.lineTo(p1[0], p1[1]);
+                ctx.arc(this.x, this.y, this.r, z.a + 135*Math.PI/180, z.a + (360-135)*Math.PI/180);
+                //ctx.fillStyle = (z.thrust > 0) ? "#f0c080" : "#80e0f0";
+                let x=this.x, y=this.y;
+                let grd = ctx.createRadialGradient(x, y, this.r/2, x, y, this.r);
+                grd.addColorStop(0, (z.thrust > 0) ? "#ff4040" : "#4080f0");
+                grd.addColorStop(1, (z.thrust > 0) ? "#ffd0a0" : "#a0e0ff");
+                ctx.fillStyle = grd;
+                ctx.fill();
+            }
+            // outline/fill
             ctx.lineWidth = 4;
             ctx.beginPath()
             const pts = [[0, 1], [30, 0.6], [135, 1], [180, 0.5], [-135, 1], [-30, 0.6]];
@@ -1018,7 +886,6 @@
                     const f = 80 * dt * this.zappo.thrust;
                     add_force(forces, this.uuid, f * Math.cos(a), f * Math.sin(a));
                 }
-                this.text = "" + this.zappo.thrust;
                 if (this.zappo.turn) {
                     const da = dt * 1 * this.zappo.turn;
                     this.zappo.a += da;
@@ -1117,22 +984,6 @@
                 }
             }
         }
-    }
-
-    /**
-     * Add a single force to a set of inter-bubbular forces.
-     *
-     * @param forces        Mapping from UUID to [fx, fy]
-     * @param target        UUID to apply force to.
-     * @param fx            Amount of force.
-     * @param fy            Amount of force.
-     */
-    function add_force(forces, target, fx, fy) {
-        let f = forces[target];
-        if (! f)
-            forces[target] = f = [0, 0];
-        f[0] += fx;
-        f[1] += fy;
     }
 
     /**
@@ -1338,7 +1189,7 @@
         if (track_to) {
             let dx = track_to.x - pan[0];
             let dy = track_to.y - pan[1];
-            let z = 0.97 * dt;
+            let z = 0.975 * dt;
             set_pan_zoom(pan[0] + dx * z, pan[1] + dy * z);
             /*
             // indicator of tracking
@@ -1359,7 +1210,7 @@
             if (anim(dt))
                 remove_anims.push(anim)
         }
-        for (na=0; na < remove_anims.length; na++) {
+        for (let na=0; na < remove_anims.length; na++) {
             animators.splice(animators.indexOf(remove_anims[na]), 1);
         }
     }
@@ -1373,6 +1224,8 @@
         let d_best = null;
         for (var nb=0; nb < bubbles.length; nb++) {
             const b = bubbles[nb];
+            if (! b.inside(x, y))
+                continue;
             const d2 = (x-b.x)*(x-b.x)+(y-b.y)*(y-b.y);
             if (d2 < b.r2) {
                 const clk_r = b.radius(x, y)
@@ -1417,7 +1270,7 @@
             area.appendChild(edit_text);
             area.appendChild(document.createElement("br"));
             // color
-            choose_color(function(){ return bubble.color; }, function(c){ bubble.color = c; }, area);
+            choose_color(function(){ return bubble.color; }, function(c){ bubble.color = c; }, area, r_colors);
             area.appendChild(document.createElement("br"));
             // bigger/smaller/puff up
             const btn_smaller = document.createElement("button");
@@ -1514,6 +1367,8 @@
             btn_pinned.setAttribute("title", "When a bubble is 'pinned' it cannot be moved by other bubbles.");
             btn_pinned.innerText = bubble.fixed ? "PINNED" : "   pin   ";
             btn_pinned.addEventListener("click", function() {
+                if (bubble.zappo)
+                    return;
                 bubble.fixed = ! bubble.fixed;
                 btn_pinned.innerText = bubble.fixed ? "PINNED" : "   pin   ";
             });
@@ -1523,12 +1378,15 @@
             btn_pop.setAttribute("title", "Pop a bubble.  Goodbye, bubble.");
             btn_pop.innerText = "pop"
             btn_pop.addEventListener("click", function() {
-                pop_bubble(bubble);
+                if (bubble.zappo)
+                    zappo_mode(false);
+                else
+                    pop_bubble(bubble);
             });
             area.appendChild(btn_pop);
             // track
             const btn_track = document.createElement("button");
-            btn_track.setAttribute("title", "Track this bubble.");
+            btn_track.setAttribute("title", "Track this bubble (keep in center).");
             btn_track.innerText = (bubble === track_to) ? "TRACKING" : "track";
             btn_track.addEventListener("click", function() {
                 if (btn_track.innerText === "track") {
@@ -2065,6 +1923,8 @@
             const n = bubbles.indexOf(zappo);
             if (n >= 0)
                 bubbles.splice(n);
+            if (track_to === zappo)
+                track_to = null;
             zappo = null;
             document.removeEventListener("keydown", zappo_keys);
             document.removeEventListener("keyup", zappo_keys);
@@ -2205,6 +2065,11 @@
 
 /*
  TODO...
+
+  subclass Bubble to support different shapes
+  barriers (chunky lines that block bubbles)
+  modularize this code a bit
+  commands in a bubble to, for instance, move toward a given spot over a certain amount of time (i.e. priority increasing toward the deadline)
 
   hard to throw bubble when zoomed out
 
