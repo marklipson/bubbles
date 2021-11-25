@@ -2066,10 +2066,10 @@
 /*
  TODO...
 
-  subclass Bubble to support different shapes
   barriers (chunky lines that block bubbles)
   modularize this code a bit
   commands in a bubble to, for instance, move toward a given spot over a certain amount of time (i.e. priority increasing toward the deadline)
+  flat 'poke' wouldn't be that hard -- r = sqrt((r-incursion)^2 + dx^2), etc.
 
   hard to throw bubble when zoomed out
 
